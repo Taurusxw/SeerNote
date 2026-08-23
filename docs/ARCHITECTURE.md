@@ -44,6 +44,8 @@ SeerNote.exe / SeerNote.App
 ├─ Presentation
 │  ├─ MainViewModel
 │  ├─ MainWindow
+│  ├─ EntryListBox / EntryListRow / EntryContextMenu
+│  ├─ NavigationSnapshot
 │  ├─ MainWindowLayoutCalculator
 │  ├─ CategorySidebar / CategoryDialog / VariableDialog
 │  └─ StickyWindow / StickyWindowManager / StickyWindowSizeCalculator
@@ -174,7 +176,21 @@ Run(args, stdin, stdout, stderr, applicationRoot) -> exitCode
 
 语义 token 集中在代码式 WPF 的 `Theme/` 模块：Canvas、Surface、SurfaceRaised、Ink、Muted、Border、Accent、AccentHover、AccentInk、Gold、Success、Warning、Danger、Focus。`ThemeResources` 同时拥有按钮、输入框、列表行、滚动条与组合框的核心模板，并提供 Primary、Quiet、Toolbar、Navigation 与 Danger 按钮角色；模板保留原生 `PART_ContentHost`、IME、键盘和 UI Automation 语义。石墨、午夜、雾白和鼠尾草只映射语义角色，功能视图不能散落主题专属颜色。语义画刷的 `Color` 绑定到可通知的主题颜色状态，使其在 WPF 样式密封后仍不可冻结；切换主题只更新颜色状态，保持画刷引用，不重建窗口或丢失编辑状态。设置使用二级折叠组；分类选择、下拉项和右键菜单使用同一语义主题。旧设置默认石墨，高对比模式由 Windows 系统颜色接管。本机没有 .NET Framework targeting pack/XAML 编译目标，因此构建直接使用 Visual Studio Roslyn 与系统 WPF 程序集；这不改变运行时或标准控件行为。
 
-`MainWindow` 继续作为代码式 WPF 的展示组合根，不接收新的存储、领域或平台职责。当前重设计把布局策略留在 `MainWindowLayoutCalculator`、分类行稳定更新留在 `CategorySidebar`、语义控件语法留在 `ThemeResources`；后续若再增加独立交互域，必须优先抽取有行为测试保护的展示边界，而不是继续扩大组合根。
+`MainWindow` 继续作为代码式 WPF 的展示组合根，不接收新的存储、领域或平台职责。当前重设计把布局策略留在 `MainWindowLayoutCalculator`、分类选择/菜单/拖放编排留在 `CategorySidebar`、分类集合与视觉容器生命周期留在 `CategoryListBox`、Note 列表的虚拟化容器生命周期留在 `EntryListBox`、语义控件语法留在 `ThemeResources`；后续若再增加独立交互域，必须优先抽取有行为测试保护的展示边界，而不是继续扩大组合根。
+
+`EntryListBox` 以 `Entry` 数据项作为 `ItemsSource`，启用 `VirtualizingStackPanel`、逻辑滚动和 `Recycling`。它在容器准备与清理阶段统一刷新或释放标题、正文预览、分类时间、收藏标记、右键菜单、工具提示与 UI Automation 名称；`MainWindow` 只持有筛选结果、选择、拖拽和业务动作，不能重新按结果总数创建 `ListBoxItem`。这条边界同时防止回收容器串行和组合根继续吸收独立展示职责。
+
+`EntryListBox` 对 Note 右键菜单使用同一可见容量边界：1–6 条保留直接菜单，第 7 条起由列表实例分别缓存一棵活动菜单和一棵回收站菜单，避免为每个回收容器重复建立分类子菜单。`ContextMenuOpening` 必须先从事件源容器解析并同步精确 `Entry`；直接菜单只在本次打开期间保存该目标，共享 `EntryContextMenu` 同时刷新收藏文案和分类勾选。两种路径的命令都消费稳定目标，后续选择变化不能把复制、收藏、删除或还原重定向到另一条 Note。命令执行或菜单关闭后立即释放目标引用，列表缓存本身随 `EntryListBox` 生命周期回收。
+
+`CategoryListBox` 按可见容量自适应：不超过 6 个、无需滚动的分类继续复用轻量直接行；第 7 个起改用稳定 `ObservableCollection` 数据项、单次 `Move` 通知、逻辑滚动与 `Recycling`，只为视口附近生成 `ListBoxItem`。容器准备/清理必须同步分类身份、计数、Tooltip、共享菜单、投放边框和 UI Automation 名称，回收容器不能保留前一分类状态。零分类不创建不可见列表；共享菜单壳随首个分类创建，两个命令到首次打开时才实现。`CategorySidebar` 只消费这条边界提供的当前分类与容器映射，不自行维护第二份行集合。
+
+`MainViewModel` 的展示通知按影响范围分流：`ContentChanged` 表示 Note 数据、筛选范围或持久状态可能改变，需要刷新导航、分类、结果和编辑器；`SelectedEntryChanged` 只表示当前 Note 身份变化，`MainWindow` 仅同步列表选择、编辑器和文档状态；`StatusChanged` 只刷新保存/动作反馈。纯选择不能借用通用内容事件触发整页刷新。
+
+标题与正文的 `TextChanged` 在编辑重入边界内更新领域对象，并以 `DispatcherPriority.Background` 的 120 ms `DispatcherTimer` 合并结果列表刷新；该 Tick 只重新计算可能受文字与 `UpdatedUtc` 影响的筛选、排序、标题和正文预览。智能视图计数与分类计数不依赖标题/正文，不能进入这条高频 Tick；自动保存由 `MainViewModel` 独立的约 350 ms 定时器负责。
+
+`NavigationSnapshot` 拥有导航聚合规则：一次枚举同时计算活跃、收藏、回收站和按修剪名称合并的分类计数，并复制自定义分类顺序为只读内容。`MainViewModel` 缓存唯一的当前快照，只有新建、收藏、删除/恢复、移动与分类增删改序等会改变导航成员或顺序的动作才使它失效；标题/正文、置顶小窗内容、搜索词和纯导航选择继续复用。`TrashCount` 与 `MainWindow` 消费同一快照，窗口在快照引用与当前选择均未变化时直接返回，不再为证明“没变”扫描全部 Note；重建后的内容等价判断仍避免无谓控件写入。
+
+编辑器分类选择器同样消费 `NavigationSnapshot` 的有序分类，并由快照提供独立于计数的精确顺序等价判断。Note 切换、搜索、收藏或计数变化但分类顺序未变时，只更新 `SelectedIndex`，不能清空并重加 `ComboBox.Items`；分类创建、重命名、删除或重排时仍完整重建一次，确保显示文本、顺序和当前 Note 分类同步。
 
 中英文排版统一使用思源黑体 CN Regular：界面、编辑正文和 WPF `FormattedText` 尺寸计算共享同一个应用私有字体实例，避免显示字体与置顶小窗测量字体不同步。仅菜单勾选符号继续使用系统 `Segoe UI Symbol`；它是图形符号，不参与 Note 正文排版。
 
@@ -207,6 +223,7 @@ Focus        #7ACAC2
 - 运行时：系统自带 .NET Framework 4.8/4.8.1。
 - UI：100%、150%、200% DPI；1080p、1200p、2560×1440、3840×2160 工作区；中文微软拼音 IME。
 - 数据：1,000 条为常规基准，5,000 条为压力边界。
+- 列表：筛选结果保留完整数据集合，展示层只实现视口附近容器；3000 条回归样本必须验证回收后的可访问名称与操作菜单仍对应当前 Note。
 - 根发布文件：`SeerNote.exe` 与 `SeerNote.Cli.exe`，不引入第三方 DLL；每个 EXE 目标小于 5 MiB。
 - 必要便携分发：两个 EXE、一个 Regular 字重和 OFL 许可证合计小于 10 MiB；CLI 通过同目录主 EXE 复用领域、存储和契约实现，不新增 DLL、字体运行时或安装器。
 - 空闲内存目标：小于 100 MiB；不以未测数字作为发布承诺。

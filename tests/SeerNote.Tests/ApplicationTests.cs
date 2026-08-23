@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Windows.Threading;
@@ -17,8 +18,13 @@ namespace SeerNote.Tests
         {
             ViewModelDeletesRestoresAndPersists();
             ViewModelClearsTrashAndPersists();
+            ClearTrashCompactsInPlaceAndPreservesNoOpState();
             ViewModelManagesOrderedCategoriesAndUnifiedNotes();
             ViewModelUpdatesCloseButtonBehaviorAndPersists();
+            FilteredEntriesReuseStableSnapshotsAndInvalidate();
+            NavigationSnapshotsReuseUntilNavigationChanges();
+            EntrySelectionUsesNarrowNotification();
+            StatusAnnouncementsStayActionable();
             SingleInstanceRejectsSecondOwner();
             DirectoryIdentityIgnoresCaseAndTrailingSeparators();
             LockFileRejectsDifferentNamedInstances();
@@ -44,6 +50,178 @@ namespace SeerNote.Tests
                 Require(loaded.Success, "Settings should reload after updating close button behavior.");
                 Require(loaded.State.Settings.CloseButtonBehavior == CloseButtonBehavior.MinimizeToTray, "Updated close button behavior should persist.");
                 Require(loaded.State.Settings.Theme == AppTheme.Porcelain, "Updated application theme should persist.");
+            });
+        }
+
+        private static void FilteredEntriesReuseStableSnapshotsAndInvalidate()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var state = new AppState();
+                state.Categories.Add("工作");
+                state.Categories.Add("资料");
+                var first = new Entry { Title = "Alpha 工作", Body = "共同关键词", Category = "工作", UpdatedUtc = DateTime.UtcNow };
+                var second = new Entry { Title = "Alpha 资料", Body = "共同关键词", Category = "资料", UpdatedUtc = DateTime.UtcNow.AddMinutes(-1) };
+                state.Entries.Add(first);
+                state.Entries.Add(second);
+
+                using (var viewModel = new MainViewModel(state, new PortableStore(root), new ClipboardService(), Dispatcher.CurrentDispatcher))
+                {
+                    IList<Entry> initial = viewModel.GetFilteredEntries();
+                    Require(Object.ReferenceEquals(initial, viewModel.GetFilteredEntries()), "Unchanged filter state should reuse its read-only result snapshot.");
+
+                    viewModel.SetSearchText("Alpha");
+                    IList<Entry> searched = viewModel.GetFilteredEntries();
+                    Require(searched.Count == 2 && !Object.ReferenceEquals(initial, searched), "Changing the query should produce a fresh, correct result snapshot.");
+                    Require(Object.ReferenceEquals(searched, viewModel.GetFilteredEntries()), "Repeated reads of one query should reuse the computed snapshot.");
+
+                    viewModel.SelectCategory("工作");
+                    IList<Entry> category = viewModel.GetFilteredEntries();
+                    Require(category.Count == 1 && Object.ReferenceEquals(first, category[0]), "Category filtering should preserve the matching Note after pre-filtering.");
+                    Require(Object.ReferenceEquals(category, viewModel.GetFilteredEntries()), "Repeated category reads should reuse the computed snapshot.");
+
+                    Require(viewModel.MoveEntryToCategory(first.Id, "资料"), "The cache fixture should move the selected Note to another category.");
+                    IList<Entry> afterMove = viewModel.GetFilteredEntries();
+                    Require(afterMove.Count == 0 && !Object.ReferenceEquals(category, afterMove), "A content mutation should invalidate the snapshot before selection is reconciled.");
+                    Require(viewModel.SelectedEntry == null, "Selection reconciliation should observe the invalidated category result.");
+                }
+            });
+        }
+
+        private static void NavigationSnapshotsReuseUntilNavigationChanges()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var state = new AppState();
+                state.Categories.Add("工作");
+                state.Categories.Add("资料");
+                var active = new Entry { Title = "Alpha", Body = "初始正文", Category = "工作", UpdatedUtc = DateTime.UtcNow };
+                var deleted = new Entry { Title = "已删除", Category = "资料", IsDeleted = true, DeletedUtc = DateTime.UtcNow };
+                state.Entries.Add(active);
+                state.Entries.Add(deleted);
+
+                using (var viewModel = new MainViewModel(state, new PortableStore(root), new ClipboardService(), Dispatcher.CurrentDispatcher))
+                {
+                    NavigationSnapshot snapshot = viewModel.GetNavigationSnapshot();
+                    Require(Object.ReferenceEquals(snapshot, viewModel.GetNavigationSnapshot()), "Stable navigation reads should reuse one immutable snapshot.");
+                    Require(snapshot.AllCount == 1 && snapshot.TrashCount == 1 && snapshot.CategoryCounts["工作"] == 1, "The initial cached navigation snapshot should preserve count policy.");
+
+                    viewModel.UpdateSelectedBody("正文变化不影响导航计数");
+                    Require(Object.ReferenceEquals(snapshot, viewModel.GetNavigationSnapshot()), "Text edits should retain the navigation snapshot.");
+                    active.Body = "置顶小窗正文变化";
+                    viewModel.NotifyExternalEntryChanged(active);
+                    Require(Object.ReferenceEquals(snapshot, viewModel.GetNavigationSnapshot()), "Known external body or sticky changes should retain the navigation snapshot.");
+                    viewModel.SetSearchText("Alpha");
+                    viewModel.SelectCategory("工作");
+                    viewModel.SelectView(SmartView.All);
+                    Require(Object.ReferenceEquals(snapshot, viewModel.GetNavigationSnapshot()), "Search and navigation selection changes should retain count content.");
+
+                    Entry created = viewModel.CreateEntry();
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Creating a Note should invalidate navigation counts.");
+                    Require(snapshot.AllCount == 2, "Creating an active Note should increase the all count.");
+
+                    viewModel.ToggleFavorite();
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Changing favorite membership should invalidate navigation counts.");
+                    Require(snapshot.FavoriteCount == 1, "Favoriting the created Note should increase the favorite count.");
+
+                    Require(viewModel.MoveEntryToCategory(created.Id, "资料"), "The navigation cache fixture should move the created Note.");
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Moving a Note should invalidate category counts.");
+                    Require(snapshot.CategoryCounts["工作"] == 1 && snapshot.CategoryCounts["资料"] == 1, "Moved Note counts should appear in the destination category.");
+
+                    viewModel.SelectEntry(created);
+                    viewModel.SoftDeleteSelected();
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Soft deletion should invalidate active, favorite and trash counts.");
+                    Require(snapshot.AllCount == 1 && snapshot.FavoriteCount == 0 && snapshot.TrashCount == 2, "Soft deletion should move the Note between navigation scopes.");
+
+                    viewModel.SelectEntry(created);
+                    viewModel.RestoreSelected();
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Restoring a Note should invalidate navigation counts.");
+                    Require(snapshot.AllCount == 2 && snapshot.FavoriteCount == 1 && snapshot.TrashCount == 1, "Restoration should return the Note to active navigation scopes.");
+
+                    viewModel.SelectEntry(created);
+                    viewModel.SoftDeleteSelected();
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Repeated soft deletion should still invalidate navigation counts.");
+                    viewModel.SelectEntry(created);
+                    viewModel.PermanentlyDeleteSelected();
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Permanent deletion should invalidate trash counts.");
+                    Require(snapshot.TrashCount == 1, "Permanent deletion should remove only the selected trash Note.");
+
+                    viewModel.ClearTrash();
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Clearing trash should invalidate its count.");
+                    Require(snapshot.TrashCount == 0, "Clearing trash should publish an empty trash count.");
+
+                    string error;
+                    Require(viewModel.CreateCategory("归档", out error), error);
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Creating a category should invalidate navigation order.");
+                    Require(viewModel.RenameCategory("归档", "参考", out error), error);
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Renaming a category should invalidate navigation content.");
+                    Require(viewModel.ReorderCategory("参考", "工作", false), "The navigation cache fixture should reorder categories.");
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Reordering categories should invalidate navigation order.");
+                    Require(viewModel.DeleteCategory("参考"), "The navigation cache fixture should delete the renamed category.");
+                    snapshot = RequireFreshNavigationSnapshot(viewModel, snapshot, "Deleting a category should invalidate navigation content.");
+                    Require(snapshot.Categories.Count == 2, "Category invalidation should preserve the final ordered category set.");
+                }
+            });
+        }
+
+        private static NavigationSnapshot RequireFreshNavigationSnapshot(MainViewModel viewModel, NavigationSnapshot previous, string message)
+        {
+            NavigationSnapshot current = viewModel.GetNavigationSnapshot();
+            Require(!Object.ReferenceEquals(previous, current), message);
+            Require(Object.ReferenceEquals(current, viewModel.GetNavigationSnapshot()), "A rebuilt navigation snapshot should remain stable until the next relevant mutation.");
+            return current;
+        }
+
+        private static void EntrySelectionUsesNarrowNotification()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var state = new AppState();
+                var first = new Entry { Title = "第一条" };
+                var second = new Entry { Title = "第二条", UpdatedUtc = first.UpdatedUtc.AddMinutes(-1) };
+                state.Entries.Add(first);
+                state.Entries.Add(second);
+
+                using (var viewModel = new MainViewModel(state, new PortableStore(root), new ClipboardService(), Dispatcher.CurrentDispatcher))
+                {
+                    int contentChanges = 0;
+                    int selectionChanges = 0;
+                    viewModel.ContentChanged += delegate { contentChanges++; };
+                    viewModel.SelectedEntryChanged += delegate { selectionChanges++; };
+
+                    viewModel.SelectEntry(second);
+                    Require(Object.ReferenceEquals(second, viewModel.SelectedEntry), "Selecting a Note should update the current entry.");
+                    Require(selectionChanges == 1 && contentChanges == 0, "Pure selection should use the narrow notification without reporting a content mutation.");
+
+                    viewModel.SelectEntry(second);
+                    Require(selectionChanges == 1 && contentChanges == 0, "Selecting the current Note again should remain a no-op.");
+
+                    viewModel.UpdateSelectedBody("正文发生变化");
+                    Require(selectionChanges == 1 && contentChanges == 1, "Editing the selected Note should continue through the content-change path.");
+                }
+            });
+        }
+
+        private static void StatusAnnouncementsStayActionable()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var state = new AppState();
+                state.Entries.Add(new Entry { Title = "状态反馈", Body = "初始正文" });
+                using (var viewModel = new MainViewModel(state, new PortableStore(root), new ClipboardService(), Dispatcher.CurrentDispatcher))
+                {
+                    Require(!viewModel.StatusShouldAnnounce && viewModel.StatusRevision == 0, "Initial status should not create an unsolicited announcement.");
+
+                    viewModel.ReportStatus("已完成用户动作。", false);
+                    int actionRevision = viewModel.StatusRevision;
+                    Require(viewModel.StatusShouldAnnounce && actionRevision > 0, "Explicit user-action feedback should be eligible for a polite announcement.");
+
+                    viewModel.UpdateSelectedBody("触发自动保存但不制造播报噪声");
+                    Require(!viewModel.StatusShouldAnnounce && viewModel.StatusRevision > actionRevision, "Routine autosave transitions should suppress live announcements.");
+
+                    viewModel.ReportStatus("保存失败：请重试。", true);
+                    Require(viewModel.StatusShouldAnnounce && viewModel.StatusIsError, "Actionable failures should remain eligible for an assertive announcement.");
+                }
             });
         }
 
@@ -139,7 +317,10 @@ namespace SeerNote.Tests
                 {
                     viewModel.SelectView(SmartView.Trash);
                     Require(viewModel.TrashCount == 2, "Trash count should include every deleted entry.");
+                    bool selectionWasReconciledBeforeStatus = false;
+                    viewModel.StatusChanged += delegate { selectionWasReconciledBeforeStatus = viewModel.SelectedEntry == null; };
                     Require(viewModel.ClearTrash() == 2, "Clear trash should report the number of permanently deleted entries.");
+                    Require(selectionWasReconciledBeforeStatus, "Clear trash status observers should not see a removed Note as the current selection.");
                     Require(viewModel.TrashCount == 0, "Trash should be empty after clearing.");
                     Require(state.Entries.Count == 1 && Object.ReferenceEquals(active, state.Entries[0]), "Clear trash must preserve active entries.");
                     Require(viewModel.SelectedEntry == null, "Trash selection should clear when no deleted entries remain.");
@@ -150,6 +331,53 @@ namespace SeerNote.Tests
                 LoadResult loaded = store.Load();
                 Require(loaded.Success, "State should reload after clearing trash.");
                 Require(loaded.State.Entries.Count == 1 && loaded.State.Entries[0].Title == "保留条目", "Only active entries should persist after clearing trash.");
+            });
+        }
+
+        private static void ClearTrashCompactsInPlaceAndPreservesNoOpState()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var state = new AppState();
+                var activeFirst = new Entry { Title = "保留一", UpdatedUtc = DateTime.UtcNow.AddMinutes(-2) };
+                var deletedFirst = new Entry { Title = "删除一", IsDeleted = true, DeletedUtc = DateTime.UtcNow.AddMinutes(-2) };
+                var activeSecond = new Entry { Title = "保留二", UpdatedUtc = DateTime.UtcNow.AddMinutes(-1) };
+                var deletedSecond = new Entry { Title = "删除二", IsDeleted = true, DeletedUtc = DateTime.UtcNow.AddMinutes(-1) };
+                state.Entries.Add(activeFirst);
+                state.Entries.Add(null);
+                state.Entries.Add(deletedFirst);
+                state.Entries.Add(activeSecond);
+                state.Entries.Add(deletedSecond);
+                List<Entry> entries = state.Entries;
+
+                using (var viewModel = new MainViewModel(state, new PortableStore(root), new ClipboardService(), Dispatcher.CurrentDispatcher))
+                {
+                    viewModel.SelectEntry(activeSecond);
+                    IList<Entry> filteredBefore = viewModel.GetFilteredEntries();
+                    NavigationSnapshot navigationBefore = viewModel.GetNavigationSnapshot();
+                    int contentChanges = 0;
+                    int selectionChanges = 0;
+                    int statusChanges = 0;
+                    viewModel.ContentChanged += delegate { contentChanges++; };
+                    viewModel.SelectedEntryChanged += delegate { selectionChanges++; };
+                    viewModel.StatusChanged += delegate { statusChanges++; };
+
+                    Require(viewModel.ClearTrash() == 2, "Clear trash should report every removed non-null deleted Note.");
+                    Require(Object.ReferenceEquals(entries, state.Entries), "Clear trash should compact the existing Entry list instead of replacing it.");
+                    Require(state.Entries.Count == 3 && Object.ReferenceEquals(state.Entries[0], activeFirst) && state.Entries[1] == null && Object.ReferenceEquals(state.Entries[2], activeSecond), "Clear trash should preserve active and null survivors in their original relative order.");
+                    Require(Object.ReferenceEquals(viewModel.SelectedEntry, activeSecond), "Clearing trash should preserve a selected active Note that remains visible.");
+                    Require(contentChanges == 1 && selectionChanges == 0 && statusChanges == 1, "A nonempty clear should publish one content/status change without a separate selection event.");
+                    Require(viewModel.HasUnsavedChanges && viewModel.StatusText == "尚未保存" && !viewModel.StatusIsError && !viewModel.StatusShouldAnnounce, "A nonempty clear should retain the existing dirty, non-announcing save status contract.");
+                    IList<Entry> filteredAfter = viewModel.GetFilteredEntries();
+                    NavigationSnapshot navigationAfter = viewModel.GetNavigationSnapshot();
+                    Require(!Object.ReferenceEquals(filteredBefore, filteredAfter) && !Object.ReferenceEquals(navigationBefore, navigationAfter), "A nonempty clear should invalidate filtered and navigation caches.");
+                    Require(navigationAfter.TrashCount == 0, "A nonempty clear should rebuild an empty trash count.");
+
+                    int statusRevision = viewModel.StatusRevision;
+                    Require(viewModel.ClearTrash() == 0, "Clearing an already empty trash should remain a no-op.");
+                    Require(Object.ReferenceEquals(filteredAfter, viewModel.GetFilteredEntries()) && Object.ReferenceEquals(navigationAfter, viewModel.GetNavigationSnapshot()), "An empty clear should retain filtered and navigation cache identities.");
+                    Require(contentChanges == 1 && selectionChanges == 0 && statusChanges == 1 && viewModel.StatusRevision == statusRevision, "An empty clear should not publish content, selection or status changes.");
+                }
             });
         }
 

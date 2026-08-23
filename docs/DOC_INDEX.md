@@ -9,12 +9,13 @@
 - [ADR-0001](adr/0001-net48-wpf-portable-shell.md)：选择 .NET Framework 4.8 WPF。
 - [ADR-0002](adr/0002-atomic-json-store.md)：选择原子 JSON 存储。
 - [项目进度](PROGRESS.md)：当前状态和阶段入口。
+- [项目交接](HANDOFF.md)：供下一对话一次性接管的最新冻结快照；接管后不在当前对话继续维护。
+- [1.8.0 发布说明](progress/releases/v1.8.0/RELEASE_NOTES.md)：搜索可达性、辅助技术反馈与大集合响应性升级。
+- [1.8.0 发布验收](progress/releases/v1.8.0/ACCEPTANCE.md)：完整测试、便携结构、隔离数据往返、发行资产与公开发布证据。
 - [1.7.0 智能体友好 UI 重设计](progress/rounds/2026-08-23-round-002-agent-friendly-ui.md)：语义控件、工作台层级、四档布局与实机交互证据。
 - [1.7.0 发布说明](progress/releases/v1.7.0/RELEASE_NOTES.md)：智能体友好桌面工作台与多分辨率设计升级。
 - [1.7.0 发布验收](progress/releases/v1.7.0/ACCEPTANCE.md)：六组测试、十二种真实 WPF 渲染、可见窗口和便携发布验收。
 - [1.6.1 复制正文下移](progress/rounds/2026-08-23-round-001-copy-body-bottom.md)：顶部/底部动作层级、最小窗口与回收站验证。
-- [1.6.1 发布说明](progress/releases/v1.6.1/RELEASE_NOTES.md)：正文复制与智能体交接动作集中。
-- [1.6.1 发布验收](progress/releases/v1.6.1/ACCEPTANCE.md)：六组测试、四种关键渲染、根目录双 EXE 与便携结构验收。
 - [1.6.0 智能体 CLI 与桌面交接](progress/rounds/2026-08-22-round-001-agent-cli.md)：CLI seam、共享 payload、工作区锁、WPF 交接区与发布证据。
 - [1.5.0 主窗口多分辨率适配](progress/rounds/2026-08-21-round-001-responsive-main-window.md)：四档工作区、布局断点、用户边界与离屏渲染。
 - [变更记录](CHANGELOG.md)：版本级用户可见变化。

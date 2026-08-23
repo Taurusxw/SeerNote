@@ -19,7 +19,7 @@ CLI 用法见 [命令行接口](docs/CLI.md)；交互细节与明确非目标见
 
 ## 便携约定
 
-首个便携版已经发布。直接从仓库根目录运行：
+最新便携版已经发布。推荐从 [GitHub Releases](https://github.com/Taurusxw/SeerNote/releases/latest) 下载 `SeerNote-portable-v1.8.0.zip`，解压后直接运行：
 
 ```text
 SeerNote.exe
@@ -32,9 +32,11 @@ SeerNote.Cli.exe schema
 
 发布目录中的 `fonts/` 是桌面应用私有字体资产，必须和两个 EXE 一起复制。SeerNote 会直接从该目录加载思源黑体 CN Regular，不安装或修改 Windows 系统字体；许可证随字体一并保留。
 
+发布页同时提供 `SHA256SUMS.txt`。当前 EXE 未使用商业代码签名证书，Windows SmartScreen 可能显示未知发布者；可在运行前用发布页校验和核对下载文件，不应绕过来源不明文件的系统警告。
+
 ## 发布状态
 
-`1.7.0` 已发布到仓库根目录，完成智能体友好的桌面工作台重设计、四档分辨率适配、四主题与关键状态真实 WPF 渲染、六组自动化测试及便携结构验收。权威状态见 [项目进度](docs/PROGRESS.md)，发布证据见 [1.7.0 发布验收](docs/progress/releases/v1.7.0/ACCEPTANCE.md)。
+`1.8.0` 已发布到仓库根目录，补全搜索键盘闭环和辅助技术状态反馈，并针对大 Note/分类集合完成列表虚拟化、稳定快照、窄刷新边界、菜单复用与线性回收站清理。完整发布证据见 [1.8.0 发布验收](docs/progress/releases/v1.8.0/ACCEPTANCE.md)。
 
 ## 构建
 

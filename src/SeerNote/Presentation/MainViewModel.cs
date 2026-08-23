@@ -12,6 +12,7 @@ namespace SeerNote.Presentation
 {
     public sealed class MainViewModel : IDisposable
     {
+        private static readonly Predicate<Entry> DeletedEntryPredicate = entry => entry != null && entry.IsDeleted;
         private readonly PortableStore _store;
         private readonly ClipboardService _clipboard;
         private readonly Dispatcher _dispatcher;
@@ -27,6 +28,14 @@ namespace SeerNote.Presentation
         private SmartView _selectedView;
         private string _statusText;
         private bool _statusIsError;
+        private bool _statusShouldAnnounce;
+        private int _statusRevision;
+        private IList<Entry> _filteredEntries;
+        private int _filteredEntriesVersion = -1;
+        private string _filteredEntriesSearchText;
+        private string _filteredEntriesCategory;
+        private SmartView _filteredEntriesView;
+        private NavigationSnapshot _navigationSnapshot;
 
         public MainViewModel(AppState state, PortableStore store, ClipboardService clipboard, Dispatcher dispatcher)
         {
@@ -48,6 +57,7 @@ namespace SeerNote.Presentation
         }
 
         public event EventHandler ContentChanged;
+        public event EventHandler SelectedEntryChanged;
         public event EventHandler StatusChanged;
 
         public AppState State { get; private set; }
@@ -82,6 +92,16 @@ namespace SeerNote.Presentation
             get { return _statusIsError; }
         }
 
+        public bool StatusShouldAnnounce
+        {
+            get { return _statusShouldAnnounce; }
+        }
+
+        public int StatusRevision
+        {
+            get { return _statusRevision; }
+        }
+
         public CloseButtonBehavior CloseButtonBehavior
         {
             get { return State.Settings.CloseButtonBehavior; }
@@ -99,23 +119,47 @@ namespace SeerNote.Presentation
 
         public int TrashCount
         {
-            get { return State.Entries.Count(entry => entry != null && entry.IsDeleted); }
+            get { return GetNavigationSnapshot().TrashCount; }
         }
 
         public IList<Entry> GetFilteredEntries()
         {
-            IEnumerable<Entry> result = EntrySearch.Filter(State.Entries, _searchText, _selectedView);
+            if (_filteredEntries != null &&
+                _filteredEntriesVersion == _version &&
+                _filteredEntriesView == _selectedView &&
+                String.Equals(_filteredEntriesSearchText, _searchText, StringComparison.Ordinal) &&
+                String.Equals(_filteredEntriesCategory, _selectedCategory, StringComparison.Ordinal))
+            {
+                return _filteredEntries;
+            }
+
+            IEnumerable<Entry> source = State.Entries;
             if (!String.IsNullOrWhiteSpace(_selectedCategory))
             {
                 string category = _selectedCategory;
-                result = result.Where(entry => String.Equals(entry.Category, category, StringComparison.InvariantCultureIgnoreCase));
+                source = source.Where(entry => entry != null && String.Equals(entry.Category, category, StringComparison.InvariantCultureIgnoreCase));
             }
-            return new ReadOnlyCollection<Entry>(result.ToList());
+            IList<Entry> result = EntrySearch.Filter(source, _searchText, _selectedView);
+            _filteredEntries = new ReadOnlyCollection<Entry>(result);
+            _filteredEntriesVersion = _version;
+            _filteredEntriesSearchText = _searchText;
+            _filteredEntriesCategory = _selectedCategory;
+            _filteredEntriesView = _selectedView;
+            return _filteredEntries;
         }
 
         public IList<string> GetCategories()
         {
             return new ReadOnlyCollection<string>(new List<string>(State.Categories));
+        }
+
+        public NavigationSnapshot GetNavigationSnapshot()
+        {
+            if (_navigationSnapshot == null)
+            {
+                _navigationSnapshot = NavigationSnapshot.Create(State.Entries, State.Categories);
+            }
+            return _navigationSnapshot;
         }
 
         public void SetSearchText(string value)
@@ -174,7 +218,7 @@ namespace SeerNote.Presentation
                 return;
             }
             _selectedEntry = entry;
-            RaiseContentChanged();
+            RaiseSelectedEntryChanged();
         }
 
         public Entry CreateEntry()
@@ -193,7 +237,7 @@ namespace SeerNote.Presentation
             _selectedView = SmartView.All;
             State.Settings.LastSmartView = _selectedView;
             _searchText = String.Empty;
-            MarkChanged();
+            MarkChanged(true);
             RaiseContentChanged();
             return entry;
         }
@@ -225,7 +269,7 @@ namespace SeerNote.Presentation
             _selectedCategory = normalized;
             _selectedView = SmartView.All;
             State.Settings.LastSmartView = _selectedView;
-            MarkChanged();
+            MarkChanged(true);
             EnsureVisibleSelection();
             RaiseContentChanged();
             error = null;
@@ -270,7 +314,7 @@ namespace SeerNote.Presentation
             {
                 _selectedCategory = normalized;
             }
-            MarkChanged();
+            MarkChanged(true);
             RaiseContentChanged();
             error = null;
             return true;
@@ -296,7 +340,7 @@ namespace SeerNote.Presentation
             {
                 _selectedCategory = null;
             }
-            MarkChanged();
+            MarkChanged(true);
             EnsureVisibleSelection();
             RaiseContentChanged();
             return true;
@@ -315,7 +359,7 @@ namespace SeerNote.Presentation
             targetIndex = FindCategoryIndex(targetCategory);
             int insertIndex = insertAfter ? targetIndex + 1 : targetIndex;
             State.Categories.Insert(insertIndex, moved);
-            MarkChanged();
+            MarkChanged(true);
             RaiseContentChanged();
             return true;
         }
@@ -335,7 +379,7 @@ namespace SeerNote.Presentation
             }
             entry.Category = destination;
             entry.UpdatedUtc = DateTime.UtcNow;
-            MarkChanged();
+            MarkChanged(true);
             EnsureVisibleSelection();
             RaiseContentChanged();
             return true;
@@ -348,7 +392,7 @@ namespace SeerNote.Presentation
                 return;
             }
             _selectedEntry.IsFavorite = !_selectedEntry.IsFavorite;
-            TouchSelected();
+            TouchSelected(true);
         }
 
         public Entry SoftDeleteSelected()
@@ -365,7 +409,7 @@ namespace SeerNote.Presentation
             {
                 deleted.Sticky.IsOpen = false;
             }
-            MarkChanged();
+            MarkChanged(true);
             EnsureVisibleSelection();
             RaiseContentChanged();
             return deleted;
@@ -381,7 +425,7 @@ namespace SeerNote.Presentation
             restored.IsDeleted = false;
             restored.DeletedUtc = null;
             restored.UpdatedUtc = DateTime.UtcNow;
-            MarkChanged();
+            MarkChanged(true);
             EnsureVisibleSelection();
             RaiseContentChanged();
             return restored;
@@ -396,7 +440,7 @@ namespace SeerNote.Presentation
             Entry removed = _selectedEntry;
             State.Entries.Remove(removed);
             _selectedEntry = null;
-            MarkChanged();
+            MarkChanged(true);
             EnsureVisibleSelection();
             RaiseContentChanged();
             return removed;
@@ -405,20 +449,17 @@ namespace SeerNote.Presentation
         public int ClearTrash()
         {
             ThrowIfDisposed();
-            List<Entry> removed = State.Entries.Where(entry => entry != null && entry.IsDeleted).ToList();
-            if (removed.Count == 0)
+            int removedCount = State.Entries.RemoveAll(DeletedEntryPredicate);
+            if (removedCount == 0)
             {
                 return 0;
             }
 
-            foreach (Entry entry in removed)
-            {
-                State.Entries.Remove(entry);
-            }
+            MarkChanged(true, false);
             EnsureVisibleSelection();
-            MarkChanged();
+            RaiseStatusChanged();
             RaiseContentChanged();
-            return removed.Count;
+            return removedCount;
         }
 
         public void NotifyExternalEntryChanged(Entry entry)
@@ -551,6 +592,7 @@ namespace SeerNote.Presentation
         {
             _statusText = String.IsNullOrWhiteSpace(text) ? "就绪" : text;
             _statusIsError = isError;
+            _statusShouldAnnounce = true;
             RaiseStatusChanged();
         }
 
@@ -572,13 +614,13 @@ namespace SeerNote.Presentation
                 return;
             }
             update(_selectedEntry);
-            TouchSelected();
+            TouchSelected(false);
         }
 
-        private void TouchSelected()
+        private void TouchSelected(bool navigationChanged)
         {
             _selectedEntry.UpdatedUtc = DateTime.UtcNow;
-            MarkChanged();
+            MarkChanged(navigationChanged);
             RaiseContentChanged();
         }
 
@@ -591,18 +633,26 @@ namespace SeerNote.Presentation
             }
         }
 
-        private void MarkChanged()
+        private void MarkChanged(bool navigationChanged = false, bool publishStatusChanged = true)
         {
             if (_disposed)
             {
                 return;
             }
+            if (navigationChanged)
+            {
+                _navigationSnapshot = null;
+            }
             _version++;
             _statusText = "尚未保存";
             _statusIsError = false;
+            _statusShouldAnnounce = false;
             _saveTimer.Stop();
             _saveTimer.Start();
-            RaiseStatusChanged();
+            if (publishStatusChanged)
+            {
+                RaiseStatusChanged();
+            }
         }
 
         private void SaveTimerOnTick(object sender, EventArgs eventArgs)
@@ -631,6 +681,7 @@ namespace SeerNote.Presentation
                 AppState snapshot = State.Clone();
                 _statusText = "保存中…";
                 _statusIsError = false;
+                _statusShouldAnnounce = false;
                 RaiseStatusChanged();
 
                 Task<SaveResult> task = Task.Run(delegate { return _store.Save(snapshot); });
@@ -692,11 +743,13 @@ namespace SeerNote.Presentation
                     _statusText = "已保存 · " + result.SavedUtc.ToLocalTime().ToString("HH:mm:ss");
                 }
                 _statusIsError = false;
+                _statusShouldAnnounce = false;
             }
             else
             {
                 _statusText = "保存失败：" + (result.Error == null ? "未知错误" : result.Error.Message);
                 _statusIsError = true;
+                _statusShouldAnnounce = true;
             }
             RaiseStatusChanged();
         }
@@ -710,8 +763,18 @@ namespace SeerNote.Presentation
             }
         }
 
+        private void RaiseSelectedEntryChanged()
+        {
+            EventHandler handler = SelectedEntryChanged;
+            if (handler != null)
+            {
+                handler(this, EventArgs.Empty);
+            }
+        }
+
         private void RaiseStatusChanged()
         {
+            _statusRevision++;
             EventHandler handler = StatusChanged;
             if (handler != null)
             {

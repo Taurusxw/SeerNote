@@ -50,11 +50,11 @@ namespace SeerNote.Presentation
         public const string CategoryDragFormat = "SeerNote.Category";
         public const string EntryDragFormat = "SeerNote.EntryId";
 
-        private readonly ListBox _list;
+        private CategoryListBox _list;
         private bool _refreshing;
         private Point _dragStart;
         private string _dragCategory;
-        private ListBoxItem _dropTarget;
+        private ContextMenu _contextMenu;
 
         public CategorySidebar()
         {
@@ -82,7 +82,16 @@ namespace SeerNote.Presentation
             header.Children.Add(add);
             Children.Add(header);
 
-            _list = new ListBox
+        }
+
+        private CategoryListBox EnsureList()
+        {
+            if (_list != null)
+            {
+                return _list;
+            }
+
+            _list = new CategoryListBox
             {
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
@@ -99,8 +108,9 @@ namespace SeerNote.Presentation
             _list.PreviewMouseMove += ListOnPreviewMouseMove;
             _list.PreviewDragOver += ListOnPreviewDragOver;
             _list.Drop += ListOnDrop;
-            _list.DragLeave += delegate { ClearDropTarget(); };
+            _list.DragLeave += delegate { _list.ClearDropTarget(); };
             Children.Add(_list);
+            return _list;
         }
 
         public event EventHandler CreateRequested;
@@ -120,29 +130,22 @@ namespace SeerNote.Presentation
             _refreshing = true;
             try
             {
-                _list.Height = categories.Count == 0 ? 0.0 : Math.Min(280.0, categories.Count * 44.0 + 2.0);
-                bool rebuild = !MatchesCategories(categories);
-                if (rebuild)
+                if (categories.Count == 0 && _list == null)
                 {
-                    _list.Items.Clear();
-                    foreach (string category in categories)
-                    {
-                        _list.Items.Add(CreateItem(category, CountFor(category, counts)));
-                    }
+                    return;
                 }
-
-                ListBoxItem selected = null;
-                for (int index = 0; index < categories.Count; index++)
+                CategoryListBox list = EnsureList();
+                if (categories.Count == 0 && list.ItemsSource == null && list.Items.Count == 0)
                 {
-                    string category = categories[index];
-                    var item = (ListBoxItem)_list.Items[index];
-                    UpdateItem(item, category, CountFor(category, counts));
-                    if (String.Equals(category, selectedCategory, StringComparison.InvariantCultureIgnoreCase))
-                    {
-                        selected = item;
-                    }
+                    list.Height = 0.0;
+                    list.SelectedItem = null;
+                    return;
                 }
-                _list.SelectedItem = selected;
+                if (categories.Count > 0 && list.RowContextMenu == null)
+                {
+                    list.RowContextMenu = GetContextMenu();
+                }
+                list.RefreshItems(categories, selectedCategory, counts);
             }
             finally
             {
@@ -150,84 +153,40 @@ namespace SeerNote.Presentation
             }
         }
 
-        private bool MatchesCategories(IList<string> categories)
+        private ContextMenu GetContextMenu()
         {
-            if (_list.Items.Count != categories.Count)
+            if (_contextMenu != null)
             {
-                return false;
+                return _contextMenu;
             }
-            for (int index = 0; index < categories.Count; index++)
+
+            _contextMenu = new ContextMenu();
+            _contextMenu.Opened += ContextMenuOnOpened;
+            return _contextMenu;
+        }
+
+        private void ContextMenuOnOpened(object sender, RoutedEventArgs eventArgs)
+        {
+            if (_contextMenu.Items.Count > 0)
             {
-                var item = _list.Items[index] as ListBoxItem;
-                if (item == null || !String.Equals(item.Tag as string, categories[index], StringComparison.InvariantCultureIgnoreCase))
-                {
-                    return false;
-                }
+                return;
             }
-            return true;
-        }
-
-        private static int CountFor(string category, IDictionary<string, int> counts)
-        {
-            int count;
-            return counts != null && counts.TryGetValue(category, out count) ? count : 0;
-        }
-
-        private ListBoxItem CreateItem(string category, int count)
-        {
-            var row = new Grid();
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.Children.Add(new TextBlock
-            {
-                Text = category,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            var countText = new TextBlock
-            {
-                Text = count.ToString(),
-                FontSize = 10,
-                Foreground = Brush(ThemeResources.MutedBrushKey),
-                Margin = new Thickness(8, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Grid.SetColumn(countText, 1);
-            row.Children.Add(countText);
-
-            var item = new ListBoxItem
-            {
-                Tag = category,
-                Content = row,
-                ToolTip = "拖动排序；将 Note 拖到这里可移动到“" + category + "”"
-            };
-            AutomationProperties.SetName(item, category + "，" + count + " 条 Note");
-            item.PreviewMouseRightButtonDown += delegate { _list.SelectedItem = item; };
-            item.ContextMenu = CreateContextMenu(category);
-            return item;
-        }
-
-        private static void UpdateItem(ListBoxItem item, string category, int count)
-        {
-            var row = item.Content as Grid;
-            var countText = row != null && row.Children.Count > 1 ? row.Children[1] as TextBlock : null;
-            if (countText != null)
-            {
-                countText.Text = count.ToString();
-            }
-            AutomationProperties.SetName(item, category + "，" + count + " 条 Note");
-        }
-
-        private ContextMenu CreateContextMenu(string category)
-        {
-            var menu = new ContextMenu();
             var rename = new MenuItem { Header = "重命名分类" };
-            rename.Click += delegate { Raise(RenameRequested, new CategoryNameEventArgs(category)); };
+            rename.Click += delegate { RaiseContextMenuAction(RenameRequested); };
             var delete = new MenuItem { Header = "删除分类" };
-            delete.Click += delegate { Raise(DeleteRequested, new CategoryNameEventArgs(category)); };
-            menu.Items.Add(rename);
-            menu.Items.Add(delete);
-            return menu;
+            delete.Click += delegate { RaiseContextMenuAction(DeleteRequested); };
+            _contextMenu.Items.Add(rename);
+            _contextMenu.Items.Add(delete);
+        }
+
+        private void RaiseContextMenuAction(EventHandler<CategoryNameEventArgs> handler)
+        {
+            var item = _contextMenu == null ? null : _contextMenu.PlacementTarget as ListBoxItem;
+            string category = _list.CategoryFromContainer(item);
+            if (category != null)
+            {
+                Raise(handler, new CategoryNameEventArgs(category));
+            }
         }
 
         private void ListOnSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
@@ -236,8 +195,7 @@ namespace SeerNote.Presentation
             {
                 return;
             }
-            var item = _list.SelectedItem as ListBoxItem;
-            string category = item == null ? null : item.Tag as string;
+            string category = _list.SelectedCategory;
             if (category != null)
             {
                 Raise(CategorySelected, new CategoryNameEventArgs(category));
@@ -248,7 +206,7 @@ namespace SeerNote.Presentation
         {
             _dragStart = eventArgs.GetPosition(_list);
             var item = ItemsControl.ContainerFromElement(_list, eventArgs.OriginalSource as DependencyObject) as ListBoxItem;
-            _dragCategory = item == null ? null : item.Tag as string;
+            _dragCategory = _list.CategoryFromContainer(item);
         }
 
         private void ListOnPreviewMouseMove(object sender, MouseEventArgs eventArgs)
@@ -276,11 +234,11 @@ namespace SeerNote.Presentation
             eventArgs.Effects = supported ? DragDropEffects.Move : DragDropEffects.None;
             if (supported)
             {
-                SetDropTarget(target);
+                _list.SetDropTarget(target);
             }
             else
             {
-                ClearDropTarget();
+                _list.ClearDropTarget();
             }
             eventArgs.Handled = true;
         }
@@ -288,7 +246,7 @@ namespace SeerNote.Presentation
         private void ListOnDrop(object sender, DragEventArgs eventArgs)
         {
             ListBoxItem target = ItemsControl.ContainerFromElement(_list, eventArgs.OriginalSource as DependencyObject) as ListBoxItem;
-            string targetCategory = target == null ? null : target.Tag as string;
+            string targetCategory = _list.CategoryFromContainer(target);
             if (targetCategory != null && eventArgs.Data.GetDataPresent(EntryDragFormat))
             {
                 string rawId = eventArgs.Data.GetData(EntryDragFormat) as string;
@@ -307,31 +265,8 @@ namespace SeerNote.Presentation
                     Raise(ReorderRequested, new CategoryReorderEventArgs(category, targetCategory, insertAfter));
                 }
             }
-            ClearDropTarget();
+            _list.ClearDropTarget();
             eventArgs.Handled = true;
-        }
-
-        private void SetDropTarget(ListBoxItem target)
-        {
-            if (ReferenceEquals(_dropTarget, target))
-            {
-                return;
-            }
-            ClearDropTarget();
-            _dropTarget = target;
-            _dropTarget.BorderBrush = Brush(ThemeResources.FocusBrushKey);
-            _dropTarget.BorderThickness = new Thickness(1);
-        }
-
-        private void ClearDropTarget()
-        {
-            if (_dropTarget == null)
-            {
-                return;
-            }
-            _dropTarget.ClearValue(Control.BorderBrushProperty);
-            _dropTarget.ClearValue(Control.BorderThicknessProperty);
-            _dropTarget = null;
         }
 
         private static Brush Brush(string key)

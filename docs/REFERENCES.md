@@ -18,6 +18,24 @@
 - [WPF 应用字体打包](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/packaging-fonts-with-applications)：字体可以作为应用内容随部署目录加载，但必须先确认再分发许可。
 - [High DPI desktop apps](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows)：Per-Monitor V2。
 - [Keyboard interactions](https://learn.microsoft.com/en-us/windows/apps/develop/input/keyboard-interactions)：键盘顺序与命令行为。
+- [Focus navigation](https://learn.microsoft.com/en-us/windows/apps/develop/input/focus-navigation)：方向键内部导航、逻辑焦点顺序和辅助技术共用的焦点模型。
+- [AutoSuggestBox guidance](https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/auto-suggest-box)：搜索输入、清空动作、结果反馈与键盘选择的组合模式。
+- [WPF live-region status sample](https://learn.microsoft.com/en-us/accessibility-tools-docs/items/wpf/text_livesetting)：动态状态的 `LiveSetting` 与 `LiveRegionChanged` 事件。
+- [Optimizing performance: Controls](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/optimizing-performance-controls)：WPF 列表 UI 虚拟化、容器回收及会禁用虚拟化的使用方式。
+- [Improve the scrolling performance of a ListBox](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/controls/how-to-improve-the-scrolling-performance-of-a-listbox)：`VirtualizingStackPanel` 与 `Recycling` 模式的官方配置示例。
+- [ItemsControl.PrepareContainerForItemOverride](https://learn.microsoft.com/en-us/dotnet/api/system.windows.controls.itemscontrol.preparecontainerforitemoverride?view=windowsdesktop-10.0) 与 [ClearContainerForItemOverride](https://learn.microsoft.com/en-us/dotnet/api/system.windows.controls.itemscontrol.clearcontainerforitemoverride?view=windowsdesktop-10.0)：回收容器的准备/清理边界，所有与数据项相关的视觉、菜单、工具提示及辅助技术状态必须在这里成对维护。
+- [Handle the ContextMenuOpening event](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/how-to-handle-the-contextmenuopening-event)：在菜单显示前依据事件源调整既有命令与状态；预先提供非空菜单可避开首次打开时动态替换过晚的时序问题。
+- [ContextMenu.PlacementTarget](https://learn.microsoft.com/en-us/dotnet/api/system.windows.controls.contextmenu.placementtarget?view=windowsdesktop-10.0)：WPF 打开附着菜单时会把拥有控件设为放置目标；共享菜单仍需从当前容器解析并冻结业务目标，不能把放置位置等同于命令身份。
+- [ObservableCollection.Move](https://learn.microsoft.com/en-us/dotnet/api/system.collections.objectmodel.observablecollection-1.move?view=netframework-4.8.1)：以一个 `Move` 集合通知表达分类重排，避免将一次移动退化为删除/插入或全量重置。
+- [Optimizing performance: Data binding](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/optimizing-performance-data-binding)：重复替换 `ItemsSource` 会重新生成列表项目；稳定集合与变更通知可避免无谓重建。
+- [ItemCollection](https://learn.microsoft.com/en-us/dotnet/api/system.windows.controls.itemcollection?view=windowsdesktop-10.0)：WPF `ItemsControl` 依赖项目集合生成内容；`Clear` 会清空集合并释放项目引用，稳定拓扑不应反复重建。
+- [Data binding overview](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/data/)：集合视图、筛选/排序层与 `IList` 数据源的 WPF 语义和性能取舍。
+- [Optimizing performance: Layout and design](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/optimizing-performance-layout-and-design)：WPF 布局递归测量/排列成本，以及减少无关布局失效的官方建议。
+- [DispatcherTimer](https://learn.microsoft.com/en-us/dotnet/api/system.windows.threading.dispatchertimer?view=netframework-4.8.1)：UI Dispatcher 定时器的“不早于间隔”语义、队列调度与优先级影响。
+- [WPF threading model](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/threading-model)：保持 Dispatcher 工作项短小、按优先级让出输入和渲染的响应性原则。
+- [CA1851: Possible multiple enumerations](https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1851)：重复枚举集合的时间成本、延迟执行风险和单次物化/聚合取舍。
+- [`List<T>.RemoveAll`](https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.removeall?view=netframework-4.8.1)：以一次 O(n) 稳定压缩删除所有匹配项并返回删除数，避免循环调用 `Remove` 导致重复线性查找与尾部搬移。
+- [Writing large, responsive .NET Framework apps](https://learn.microsoft.com/en-us/dotnet/framework/performance/writing-large-responsive-apps)：以测量定位响应性瓶颈、缓存重复计算结果，并控制缓存生命周期与内存成本。
 - [UI Automation overview](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-uiautomationoverview)：Windows 辅助技术语义。
 - [ReplaceFile](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew)：同卷原子替换语义。
 

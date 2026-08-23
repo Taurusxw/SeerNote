@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
@@ -25,6 +26,8 @@ namespace SeerNote.Presentation
         private readonly Dictionary<SmartView, TextBlock> _viewCounts = new Dictionary<SmartView, TextBlock>();
         private TextBox _searchBox;
         private TextBlock _searchPlaceholder;
+        private Border _searchShortcut;
+        private Button _clearSearchButton;
         private TextBlock _resultCount;
         private ListBox _entryList;
         private StackPanel _emptyResults;
@@ -56,6 +59,11 @@ namespace SeerNote.Presentation
         private bool _editing;
         private bool _initializingBounds;
         private bool _disposed;
+        private int _lastAnnouncedStatusRevision = -1;
+        private NavigationSnapshot _lastNavigationSnapshot;
+        private NavigationSnapshot _lastCategoryPickerSnapshot;
+        private SmartView _lastNavigationView;
+        private string _lastNavigationCategory;
         private Point _entryDragStart;
         private Entry _entryDragEntry;
 
@@ -87,6 +95,7 @@ namespace SeerNote.Presentation
             _initializingBounds = false;
 
             _viewModel.ContentChanged += ViewModelOnContentChanged;
+            _viewModel.SelectedEntryChanged += ViewModelOnSelectedEntryChanged;
             _viewModel.StatusChanged += ViewModelOnStatusChanged;
             PreviewKeyDown += MainWindowOnPreviewKeyDown;
             LocationChanged += WindowBoundsOnChanged;
@@ -163,6 +172,7 @@ namespace SeerNote.Presentation
             _resultsRefreshTimer.Stop();
             _resultsRefreshTimer.Tick -= ResultsRefreshTimerOnTick;
             _viewModel.ContentChanged -= ViewModelOnContentChanged;
+            _viewModel.SelectedEntryChanged -= ViewModelOnSelectedEntryChanged;
             _viewModel.StatusChanged -= ViewModelOnStatusChanged;
             PreviewKeyDown -= MainWindowOnPreviewKeyDown;
             LocationChanged -= WindowBoundsOnChanged;
@@ -378,7 +388,7 @@ namespace SeerNote.Presentation
                 FontSize = 14.0
             };
             AutomationProperties.SetName(_searchBox, "搜索条目");
-            AutomationProperties.SetHelpText(_searchBox, "输入中文或英文，结果会即时更新。快捷键 Ctrl+F。");
+            AutomationProperties.SetHelpText(_searchBox, "输入中文或英文，结果会即时更新。可用清空按钮或 Esc 返回全部条目。快捷键 Ctrl+F。");
             _searchBox.TextChanged += SearchBoxOnTextChanged;
             _searchBox.PreviewKeyDown += SearchBoxOnPreviewKeyDown;
             searchHost.Children.Add(_searchBox);
@@ -424,7 +434,7 @@ namespace SeerNote.Presentation
                 IsHitTestVisible = false
             };
             searchHost.Children.Add(_searchPlaceholder);
-            var searchShortcut = new Border
+            _searchShortcut = new Border
             {
                 Background = Brush(ThemeResources.SurfaceBrushKey),
                 BorderBrush = Brush(ThemeResources.BorderBrushKey),
@@ -442,7 +452,26 @@ namespace SeerNote.Presentation
                     Foreground = Brush(ThemeResources.MutedBrushKey)
                 }
             };
-            searchHost.Children.Add(searchShortcut);
+            AutomationProperties.SetName(_searchShortcut, "搜索快捷键提示");
+            searchHost.Children.Add(_searchShortcut);
+            _clearSearchButton = new Button
+            {
+                Content = "×",
+                Style = (Style)FindResource("Seer.QuietButton"),
+                ToolTip = "清空搜索（Esc）",
+                Width = 34,
+                Height = 34,
+                Padding = new Thickness(0),
+                FontSize = 18,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0),
+                Visibility = Visibility.Collapsed
+            };
+            AutomationProperties.SetName(_clearSearchButton, "清空搜索");
+            AutomationProperties.SetHelpText(_clearSearchButton, "清空当前搜索并将焦点返回搜索框。快捷键 Esc。");
+            _clearSearchButton.Click += delegate { ClearSearchAndFocus(); };
+            searchHost.Children.Add(_clearSearchButton);
             Grid.SetRow(searchHost, 1);
             root.Children.Add(searchHost);
 
@@ -474,17 +503,20 @@ namespace SeerNote.Presentation
             root.Children.Add(resultsHeader);
 
             var resultsHost = new Grid();
-            _entryList = new ListBox
+            _entryList = new EntryListBox
             {
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(0, 0, 2, 0)
+                Padding = new Thickness(0, 0, 2, 0),
+                ContextMenuFactory = CreateEntryContextMenu
             };
             ScrollViewer.SetHorizontalScrollBarVisibility(_entryList, ScrollBarVisibility.Disabled);
             AutomationProperties.SetName(_entryList, "条目结果");
-            AutomationProperties.SetHelpText(_entryList, "使用上下方向键选择，右侧可直接编辑；可拖到左侧分类中移动。");
+            AutomationProperties.SetHelpText(_entryList, "使用上下方向键选择，按 Enter 进入正文；搜索生效时按 Esc 清空。可拖到左侧分类中移动。");
             _entryList.SelectionChanged += EntryListOnSelectionChanged;
+            _entryList.PreviewKeyDown += EntryListOnPreviewKeyDown;
+            _entryList.PreviewMouseRightButtonDown += EntryListOnPreviewMouseRightButtonDown;
             _entryList.PreviewMouseLeftButtonDown += EntryListOnPreviewMouseLeftButtonDown;
             _entryList.PreviewMouseMove += EntryListOnPreviewMouseMove;
             resultsHost.Children.Add(_entryList);
@@ -839,7 +871,8 @@ namespace SeerNote.Presentation
             DockPanel.SetDock(_retrySaveButton, Dock.Right);
             dock.Children.Add(_retrySaveButton);
             _statusText = new TextBlock { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-            AutomationProperties.SetName(_statusText, "应用状态");
+            AutomationProperties.SetName(_statusText, "应用状态：就绪");
+            AutomationProperties.SetLiveSetting(_statusText, AutomationLiveSetting.Polite);
             dock.Children.Add(_statusText);
             border.Child = dock;
             return border;
@@ -858,8 +891,7 @@ namespace SeerNote.Presentation
                 {
                     _searchBox.Text = _viewModel.SearchText;
                 }
-                RefreshViewButtons();
-                RefreshCategories();
+                RefreshNavigation();
                 RefreshResults();
                 RefreshEditor();
                 RefreshStatus();
@@ -870,11 +902,15 @@ namespace SeerNote.Presentation
             }
         }
 
-        private void RefreshViewButtons()
+        private void RefreshNavigation()
         {
-            int allCount = _viewModel.State.Entries.Count(entry => entry != null && !entry.IsDeleted);
-            int favoriteCount = _viewModel.State.Entries.Count(entry => entry != null && !entry.IsDeleted && entry.IsFavorite);
-            int trashCount = _viewModel.State.Entries.Count(entry => entry != null && entry.IsDeleted);
+            NavigationSnapshot snapshot = _viewModel.GetNavigationSnapshot();
+            bool selectionChanged = _lastNavigationSnapshot == null || _lastNavigationView != _viewModel.SelectedView || !String.Equals(_lastNavigationCategory, _viewModel.SelectedCategory, StringComparison.InvariantCultureIgnoreCase);
+            if (!selectionChanged && (ReferenceEquals(snapshot, _lastNavigationSnapshot) || snapshot.HasSameContent(_lastNavigationSnapshot)))
+            {
+                _lastNavigationSnapshot = snapshot;
+                return;
+            }
             foreach (KeyValuePair<SmartView, Button> pair in _viewButtons)
             {
                 bool selected = pair.Key == _viewModel.SelectedView && _viewModel.SelectedCategory == null;
@@ -884,49 +920,27 @@ namespace SeerNote.Presentation
                 TextBlock countText;
                 if (_viewCounts.TryGetValue(pair.Key, out countText))
                 {
-                    int count = pair.Key == SmartView.Favorite ? favoriteCount : pair.Key == SmartView.Trash ? trashCount : allCount;
+                    int count = pair.Key == SmartView.Favorite ? snapshot.FavoriteCount : pair.Key == SmartView.Trash ? snapshot.TrashCount : snapshot.AllCount;
                     countText.Text = count.ToString();
                     countText.Foreground = selected ? Brush(ThemeResources.AccentBrushKey) : Brush(ThemeResources.MutedBrushKey);
                 }
             }
-        }
-
-        private void RefreshCategories()
-        {
-            var counts = new Dictionary<string, int>(StringComparer.InvariantCultureIgnoreCase);
-            foreach (Entry entry in _viewModel.State.Entries)
-            {
-                if (entry == null || entry.IsDeleted || String.IsNullOrWhiteSpace(entry.Category))
-                {
-                    continue;
-                }
-                string category = entry.Category.Trim();
-                int count;
-                counts.TryGetValue(category, out count);
-                counts[category] = count + 1;
-            }
-            _categorySidebar.Refresh(_viewModel.GetCategories(), _viewModel.SelectedCategory, counts);
+            _categorySidebar.Refresh(snapshot.Categories, _viewModel.SelectedCategory, snapshot.CategoryCounts);
+            _lastNavigationSnapshot = snapshot;
+            _lastNavigationView = _viewModel.SelectedView;
+            _lastNavigationCategory = _viewModel.SelectedCategory;
         }
 
         private void RefreshResults()
         {
             Guid selectedId = _viewModel.SelectedEntry == null ? Guid.Empty : _viewModel.SelectedEntry.Id;
             IList<Entry> entries = _viewModel.GetFilteredEntries();
-            _entryList.Items.Clear();
-            ListBoxItem selectedItem = null;
-            foreach (Entry entry in entries)
+            Entry selectedEntry = entries.FirstOrDefault(entry => entry.Id == selectedId);
+            _entryList.ItemsSource = entries;
+            _entryList.SelectedItem = selectedEntry;
+            if (selectedEntry != null)
             {
-                ListBoxItem item = CreateEntryItem(entry);
-                _entryList.Items.Add(item);
-                if (entry.Id == selectedId)
-                {
-                    selectedItem = item;
-                }
-            }
-            _entryList.SelectedItem = selectedItem;
-            if (selectedItem != null)
-            {
-                selectedItem.BringIntoView();
+                _entryList.ScrollIntoView(selectedEntry);
             }
             _resultCount.Text = CurrentScopeLabel() + "  ·  " + entries.Count + " 条";
             bool isTrashView = _viewModel.SelectedView == SmartView.Trash && _viewModel.SelectedCategory == null;
@@ -997,6 +1011,8 @@ namespace SeerNote.Presentation
         {
             _statusText.Text = _viewModel.StatusText;
             _statusText.Foreground = Brush(_viewModel.StatusIsError ? ThemeResources.DangerBrushKey : ThemeResources.MutedBrushKey);
+            AutomationProperties.SetName(_statusText, "应用状态：" + _viewModel.StatusText);
+            AutomationProperties.SetLiveSetting(_statusText, _viewModel.StatusIsError ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Polite);
             _retrySaveButton.Visibility = _viewModel.StatusIsError && _viewModel.HasUnsavedChanges ? Visibility.Visible : Visibility.Collapsed;
             if (_documentStateText != null)
             {
@@ -1023,83 +1039,76 @@ namespace SeerNote.Presentation
                 }
                 AutomationProperties.SetHelpText(_documentStateText, _viewModel.StatusText);
             }
+            AnnounceStatusIfNeeded();
         }
 
-        private ListBoxItem CreateEntryItem(Entry entry)
+        private void AnnounceStatusIfNeeded()
         {
-            var item = new ListBoxItem { Tag = entry, ToolTip = EntryTitle(entry), Margin = new Thickness(0, 0, 0, 3) };
-            AutomationProperties.SetName(item, "Note " + EntryTitle(entry));
-            item.PreviewMouseRightButtonDown += delegate { _entryList.SelectedItem = item; };
-            item.ContextMenu = CreateEntryContextMenu(entry);
-            var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var title = new TextBlock
+            if (!IsLoaded || !_viewModel.StatusShouldAnnounce || _lastAnnouncedStatusRevision == _viewModel.StatusRevision)
             {
-                Text = EntryTitle(entry),
-                FontWeight = FontWeights.SemiBold,
-                FontSize = 14,
-                TextTrimming = TextTrimming.CharacterEllipsis
-            };
-            grid.Children.Add(title);
-            var marker = new TextBlock
+                return;
+            }
+            _lastAnnouncedStatusRevision = _viewModel.StatusRevision;
+            AutomationPeer peer = FrameworkElementAutomationPeer.FromElement(_statusText);
+            if (peer != null)
             {
-                Text = entry.IsFavorite ? "★" : String.Empty,
-                Foreground = Brush(ThemeResources.GoldBrushKey),
-                FontSize = 11,
-                Margin = new Thickness(8, 1, 0, 0)
-            };
-            Grid.SetColumn(marker, 1);
-            grid.Children.Add(marker);
-            var preview = new TextBlock
-            {
-                Text = Preview(entry.Body),
-                Foreground = Brush(ThemeResources.MutedBrushKey),
-                FontSize = 12,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                Margin = new Thickness(0, 4, 4, 0)
-            };
-            Grid.SetRow(preview, 1);
-            Grid.SetColumnSpan(preview, 2);
-            grid.Children.Add(preview);
-            string category = String.IsNullOrWhiteSpace(entry.Category) ? "未分类" : entry.Category.Trim();
-            var meta = new TextBlock
-            {
-                Text = category + "  ·  " + entry.UpdatedUtc.ToLocalTime().ToString("MM-dd HH:mm"),
-                Foreground = Brush(ThemeResources.MutedBrushKey),
-                FontSize = 10.5,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                Margin = new Thickness(0, 4, 0, 0)
-            };
-            Grid.SetRow(meta, 2);
-            Grid.SetColumnSpan(meta, 2);
-            grid.Children.Add(meta);
-            item.Content = grid;
-            return item;
+                peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+            }
         }
 
         private void RefreshCategoryPicker(string selectedCategory)
         {
-            _categoryBox.Items.Clear();
-            _categoryBox.Items.Add("未分类");
+            NavigationSnapshot snapshot = _viewModel.GetNavigationSnapshot();
+            IList<string> categories = snapshot.Categories;
+            if (_lastCategoryPickerSnapshot == null || !snapshot.HasSameCategoryOrder(_lastCategoryPickerSnapshot))
+            {
+                _categoryBox.Items.Clear();
+                _categoryBox.Items.Add("未分类");
+                for (int index = 0; index < categories.Count; index++)
+                {
+                    _categoryBox.Items.Add(categories[index]);
+                }
+            }
+
             int selectedIndex = 0;
-            IList<string> categories = _viewModel.GetCategories();
             for (int index = 0; index < categories.Count; index++)
             {
                 string category = categories[index];
-                _categoryBox.Items.Add(category);
                 if (String.Equals(category, selectedCategory, StringComparison.InvariantCultureIgnoreCase))
                 {
                     selectedIndex = index + 1;
+                    break;
                 }
             }
-            _categoryBox.SelectedIndex = selectedIndex;
+            if (_categoryBox.SelectedIndex != selectedIndex)
+            {
+                _categoryBox.SelectedIndex = selectedIndex;
+            }
+            _lastCategoryPickerSnapshot = snapshot;
         }
 
         private ContextMenu CreateEntryContextMenu(Entry entry)
+        {
+            if (_entryList != null && _entryList.Items.Count <= 6)
+            {
+                return CreateDirectEntryContextMenu(entry);
+            }
+            var menu = new EntryContextMenu(
+                entry.IsDeleted,
+                GetEntryMenuCategories,
+                CopyEntryFromMenu,
+                CopyEntryIdFromMenu,
+                CopyEntryJsonFromMenu,
+                ToggleFavoriteFromMenu,
+                OpenStickyFromMenu,
+                SoftDeleteFromMenu,
+                RestoreFromMenu,
+                PermanentlyDeleteFromMenu,
+                MoveEntryFromMenu);
+            return menu;
+        }
+
+        private ContextMenu CreateDirectEntryContextMenu(Entry entry)
         {
             var menu = new ContextMenu();
             if (entry.IsDeleted)
@@ -1107,9 +1116,9 @@ namespace SeerNote.Presentation
                 AddAgentCopyItems(menu);
                 menu.Items.Add(new Separator());
                 var restore = new MenuItem { Header = "还原 Note" };
-                restore.Click += delegate { _viewModel.RestoreSelected(); };
+                restore.Click += DirectRestoreOnClick;
                 var permanentDelete = new MenuItem { Header = "永久删除" };
-                permanentDelete.Click += delegate { PermanentlyDeleteSelected(); };
+                permanentDelete.Click += DirectPermanentDeleteOnClick;
                 menu.Items.Add(restore);
                 menu.Items.Add(new Separator());
                 menu.Items.Add(permanentDelete);
@@ -1117,11 +1126,11 @@ namespace SeerNote.Presentation
             }
 
             var copy = new MenuItem { Header = "复制正文" };
-            copy.Click += delegate { CopySelected(); };
+            copy.Click += DirectCopyBodyOnClick;
             var favorite = new MenuItem { Header = entry.IsFavorite ? "取消收藏置顶" : "收藏置顶" };
-            favorite.Click += delegate { _viewModel.ToggleFavorite(); };
+            favorite.Click += DirectToggleFavoriteOnClick;
             var sticky = new MenuItem { Header = "打开置顶小窗" };
-            sticky.Click += delegate { OpenSelectedSticky(); };
+            sticky.Click += DirectOpenStickyOnClick;
             var move = new MenuItem { Header = "移动到分类" };
             var uncategorized = new MenuItem
             {
@@ -1129,7 +1138,7 @@ namespace SeerNote.Presentation
                 IsCheckable = true,
                 IsChecked = String.IsNullOrWhiteSpace(entry.Category)
             };
-            uncategorized.Click += delegate { MoveEntryFromMenu(entry.Id, null); };
+            uncategorized.Click += delegate { MoveEntryFromMenu(entry, null); };
             move.Items.Add(uncategorized);
             foreach (string category in _viewModel.GetCategories())
             {
@@ -1140,11 +1149,11 @@ namespace SeerNote.Presentation
                     IsCheckable = true,
                     IsChecked = String.Equals(entry.Category, destination, StringComparison.InvariantCultureIgnoreCase)
                 };
-                categoryItem.Click += delegate { MoveEntryFromMenu(entry.Id, destination); };
+                categoryItem.Click += delegate { MoveEntryFromMenu(entry, destination); };
                 move.Items.Add(categoryItem);
             }
             var delete = new MenuItem { Header = "移到回收站" };
-            delete.Click += delegate { SoftDeleteSelected(); };
+            delete.Click += DirectSoftDeleteOnClick;
 
             menu.Items.Add(copy);
             AddAgentCopyItems(menu);
@@ -1160,11 +1169,68 @@ namespace SeerNote.Presentation
         private void AddAgentCopyItems(ContextMenu menu)
         {
             var copyId = new MenuItem { Header = "复制 Note ID" };
-            copyId.Click += delegate { CopySelectedId(); };
+            copyId.Click += DirectCopyIdOnClick;
             var copyJson = new MenuItem { Header = "复制为 JSON" };
-            copyJson.Click += delegate { CopySelectedJson(); };
+            copyJson.Click += DirectCopyJsonOnClick;
             menu.Items.Add(copyId);
             menu.Items.Add(copyJson);
+        }
+
+        private Entry TakeDirectEntryMenuTarget(object sender)
+        {
+            var item = sender as MenuItem;
+            var menu = item == null ? null : ItemsControl.ItemsControlFromItemContainer(item) as ContextMenu;
+            Entry entry = menu == null ? null : menu.Tag as Entry;
+            if (menu != null)
+            {
+                menu.Tag = null;
+            }
+            return entry;
+        }
+
+        private void DirectCopyBodyOnClick(object sender, RoutedEventArgs eventArgs)
+        {
+            CopyEntryFromMenu(TakeDirectEntryMenuTarget(sender));
+        }
+
+        private void DirectCopyIdOnClick(object sender, RoutedEventArgs eventArgs)
+        {
+            CopyEntryIdFromMenu(TakeDirectEntryMenuTarget(sender));
+        }
+
+        private void DirectCopyJsonOnClick(object sender, RoutedEventArgs eventArgs)
+        {
+            CopyEntryJsonFromMenu(TakeDirectEntryMenuTarget(sender));
+        }
+
+        private void DirectToggleFavoriteOnClick(object sender, RoutedEventArgs eventArgs)
+        {
+            ToggleFavoriteFromMenu(TakeDirectEntryMenuTarget(sender));
+        }
+
+        private void DirectOpenStickyOnClick(object sender, RoutedEventArgs eventArgs)
+        {
+            OpenStickyFromMenu(TakeDirectEntryMenuTarget(sender));
+        }
+
+        private void DirectSoftDeleteOnClick(object sender, RoutedEventArgs eventArgs)
+        {
+            SoftDeleteFromMenu(TakeDirectEntryMenuTarget(sender));
+        }
+
+        private void DirectRestoreOnClick(object sender, RoutedEventArgs eventArgs)
+        {
+            RestoreFromMenu(TakeDirectEntryMenuTarget(sender));
+        }
+
+        private void DirectPermanentDeleteOnClick(object sender, RoutedEventArgs eventArgs)
+        {
+            PermanentlyDeleteFromMenu(TakeDirectEntryMenuTarget(sender));
+        }
+
+        private IList<string> GetEntryMenuCategories()
+        {
+            return _viewModel.GetNavigationSnapshot().Categories;
         }
 
         private void MoveEntryFromMenu(Guid entryId, string category)
@@ -1172,6 +1238,88 @@ namespace SeerNote.Presentation
             if (_viewModel.MoveEntryToCategory(entryId, category))
             {
                 _viewModel.ReportStatus("已移动到“" + (String.IsNullOrWhiteSpace(category) ? "未分类" : category) + "”。", false);
+            }
+        }
+
+        private void MoveEntryFromMenu(Entry entry, string category)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                MoveEntryFromMenu(entry.Id, category);
+            }
+        }
+
+        private bool SelectEntryForMenuCommand(Entry entry)
+        {
+            if (entry == null || !_viewModel.State.Entries.Contains(entry))
+            {
+                return false;
+            }
+            _viewModel.SelectEntry(entry);
+            return true;
+        }
+
+        private void CopyEntryFromMenu(Entry entry)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                CopySelected();
+            }
+        }
+
+        private void CopyEntryIdFromMenu(Entry entry)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                CopySelectedId();
+            }
+        }
+
+        private void CopyEntryJsonFromMenu(Entry entry)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                CopySelectedJson();
+            }
+        }
+
+        private void ToggleFavoriteFromMenu(Entry entry)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                _viewModel.ToggleFavorite();
+            }
+        }
+
+        private void OpenStickyFromMenu(Entry entry)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                OpenSelectedSticky();
+            }
+        }
+
+        private void SoftDeleteFromMenu(Entry entry)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                SoftDeleteSelected();
+            }
+        }
+
+        private void RestoreFromMenu(Entry entry)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                _viewModel.RestoreSelected();
+            }
+        }
+
+        private void PermanentlyDeleteFromMenu(Entry entry)
+        {
+            if (SelectEntryForMenuCommand(entry))
+            {
+                PermanentlyDeleteSelected();
             }
         }
 
@@ -1367,6 +1515,29 @@ namespace SeerNote.Presentation
             RefreshAll();
         }
 
+        private void ViewModelOnSelectedEntryChanged(object sender, EventArgs eventArgs)
+        {
+            _refreshing = true;
+            try
+            {
+                Entry selectedEntry = _viewModel.SelectedEntry;
+                if (!ReferenceEquals(_entryList.SelectedItem, selectedEntry))
+                {
+                    _entryList.SelectedItem = selectedEntry;
+                    if (selectedEntry != null)
+                    {
+                        _entryList.ScrollIntoView(selectedEntry);
+                    }
+                }
+                RefreshEditor();
+                RefreshStatus();
+            }
+            finally
+            {
+                _refreshing = false;
+            }
+        }
+
         private void ViewModelOnStatusChanged(object sender, EventArgs eventArgs)
         {
             RefreshStatus();
@@ -1378,8 +1549,6 @@ namespace SeerNote.Presentation
             _refreshing = true;
             try
             {
-                RefreshViewButtons();
-                RefreshCategories();
                 RefreshResults();
             }
             finally
@@ -1390,14 +1559,29 @@ namespace SeerNote.Presentation
 
         private void SearchBoxOnTextChanged(object sender, TextChangedEventArgs eventArgs)
         {
+            bool hasQuery = _searchBox.Text.Length > 0;
             if (_searchPlaceholder != null)
             {
-                _searchPlaceholder.Visibility = _searchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+                _searchPlaceholder.Visibility = hasQuery ? Visibility.Collapsed : Visibility.Visible;
+            }
+            if (_searchShortcut != null)
+            {
+                _searchShortcut.Visibility = hasQuery ? Visibility.Collapsed : Visibility.Visible;
+            }
+            if (_clearSearchButton != null)
+            {
+                _clearSearchButton.Visibility = hasQuery ? Visibility.Visible : Visibility.Collapsed;
             }
             if (!_refreshing)
             {
                 _viewModel.SetSearchText(_searchBox.Text);
             }
+        }
+
+        private void ClearSearchAndFocus()
+        {
+            _searchBox.Clear();
+            _searchBox.Focus();
         }
 
         private void SearchBoxOnPreviewKeyDown(object sender, KeyEventArgs eventArgs)
@@ -1419,22 +1603,47 @@ namespace SeerNote.Presentation
             }
         }
 
+        private void EntryListOnPreviewKeyDown(object sender, KeyEventArgs eventArgs)
+        {
+            if (Keyboard.Modifiers != ModifierKeys.None)
+            {
+                return;
+            }
+            if (eventArgs.Key == Key.Enter && _entryList.SelectedItem != null)
+            {
+                _bodyBox.Focus();
+                eventArgs.Handled = true;
+            }
+            else if (eventArgs.Key == Key.Escape && _searchBox.Text.Length > 0)
+            {
+                ClearSearchAndFocus();
+                eventArgs.Handled = true;
+            }
+        }
+
         private void EntryListOnSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
         {
             if (_refreshing)
             {
                 return;
             }
-            var item = _entryList.SelectedItem as ListBoxItem;
-            _viewModel.SelectEntry(item == null ? null : item.Tag as Entry);
-            RefreshEditor();
+            _viewModel.SelectEntry(_entryList.SelectedItem as Entry);
+        }
+
+        private void EntryListOnPreviewMouseRightButtonDown(object sender, MouseButtonEventArgs eventArgs)
+        {
+            var item = ItemsControl.ContainerFromElement(_entryList, eventArgs.OriginalSource as DependencyObject) as ListBoxItem;
+            if (item != null)
+            {
+                _entryList.SelectedItem = _entryList.ItemContainerGenerator.ItemFromContainer(item) as Entry;
+            }
         }
 
         private void EntryListOnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs eventArgs)
         {
             _entryDragStart = eventArgs.GetPosition(_entryList);
             var item = ItemsControl.ContainerFromElement(_entryList, eventArgs.OriginalSource as DependencyObject) as ListBoxItem;
-            _entryDragEntry = item == null ? null : item.Tag as Entry;
+            _entryDragEntry = item == null ? null : _entryList.ItemContainerGenerator.ItemFromContainer(item) as Entry;
         }
 
         private void EntryListOnPreviewMouseMove(object sender, MouseEventArgs eventArgs)
@@ -1591,6 +1800,7 @@ namespace SeerNote.Presentation
                 ClampStickyBounds(entry);
                 _stickyWindows.OpenOrActivate(entry);
             }
+            RefreshStatus();
             Dispatcher.BeginInvoke(new Action(delegate { _searchBox.Focus(); }), DispatcherPriority.Input);
         }
 
@@ -1637,7 +1847,7 @@ namespace SeerNote.Presentation
             }
             else if (modifiers == ModifierKeys.None && eventArgs.Key == Key.Escape && _searchBox.IsKeyboardFocusWithin && _searchBox.Text.Length > 0)
             {
-                _searchBox.Clear();
+                ClearSearchAndFocus();
                 eventArgs.Handled = true;
             }
         }
@@ -1786,14 +1996,7 @@ namespace SeerNote.Presentation
 
         private static string EntryTitle(Entry entry)
         {
-            string value = entry == null ? String.Empty : entry.DisplayTitle;
-            return String.IsNullOrWhiteSpace(value) ? "未命名" : Truncate(value, 80);
-        }
-
-        private static string Preview(string body)
-        {
-            string value = String.Join(" ", (body ?? String.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n').Select(part => part.Trim()).Where(part => part.Length > 0));
-            return value.Length == 0 ? "（正文为空）" : Truncate(value, 90);
+            return EntryListRow.TitleFor(entry);
         }
 
         private static string Truncate(string value, int length)
