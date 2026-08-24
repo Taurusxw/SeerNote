@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -17,9 +18,50 @@ namespace SeerNote.Tests
         public static void RunAll()
         {
             SchemaAndLifecycleUseStableJsonContracts();
+            MutationsMaintainManualGroupOrder();
             InvalidRequestsUseStructuredErrorsAndExitCodes();
             WorkspaceLockConflictIsReportedWithoutReadingData();
             AgentNotePayloadUsesCanonicalIdentifiersAndUtcTimestamps();
+        }
+
+        private static void MutationsMaintainManualGroupOrder()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var state = new AppState();
+                var favorite = new Entry { Title = "原收藏", IsFavorite = true };
+                var normal = new Entry { Title = "原普通" };
+                var deleted = new Entry { Title = "原回收", IsDeleted = true, DeletedUtc = DateTime.UtcNow };
+                state.Entries.Add(favorite);
+                state.Entries.Add(normal);
+                state.Entries.Add(deleted);
+                Require(new PortableStore(root).Save(state).Success, "CLI order fixture should save.");
+
+                CliResult created = Run(root, new[] { "create", "--title", "新普通" });
+                RequireSuccessJson(created, "create");
+                Guid createdId = Guid.Parse(ExtractId(created.Output));
+                AppState afterCreate = new PortableStore(root).Load().State;
+                IList<Entry> active = EntrySearch.Filter(afterCreate.Entries, null, SmartView.All);
+                Require(active.Select(entry => entry.Title).SequenceEqual(new[] { "原收藏", "新普通", "原普通" }), "CLI create should place a Note at the start of its non-favorite group.");
+
+                CliResult favorited = Run(root, new[] { "update", "--id", normal.Id.ToString("D"), "--favorite", "true" });
+                RequireSuccessJson(favorited, "update");
+                AppState afterFavorite = new PortableStore(root).Load().State;
+                active = EntrySearch.Filter(afterFavorite.Entries, null, SmartView.All);
+                Require(active.Select(entry => entry.Title).SequenceEqual(new[] { "原普通", "原收藏", "新普通" }), "CLI favorite changes should place a Note at the start of its new pinned group.");
+
+                CliResult removed = Run(root, new[] { "delete", "--id", createdId.ToString("D") });
+                RequireSuccessJson(removed, "delete");
+                AppState afterDelete = new PortableStore(root).Load().State;
+                IList<Entry> trash = EntrySearch.Filter(afterDelete.Entries, null, SmartView.Trash);
+                Require(trash.Select(entry => entry.Title).SequenceEqual(new[] { "新普通", "原回收" }), "CLI delete should place a Note at the start of the recycle-bin group.");
+
+                CliResult restored = Run(root, new[] { "restore", "--id", createdId.ToString("D") });
+                RequireSuccessJson(restored, "restore");
+                AppState afterRestore = new PortableStore(root).Load().State;
+                active = EntrySearch.Filter(afterRestore.Entries, null, SmartView.All);
+                Require(active.Select(entry => entry.Title).SequenceEqual(new[] { "原普通", "原收藏", "新普通" }), "CLI restore should place a Note at the start of its active group without disturbing favorites.");
+            });
         }
 
         private static void SchemaAndLifecycleUseStableJsonContracts()

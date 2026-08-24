@@ -179,6 +179,7 @@ namespace SeerNote.Cli
                 UpdatedUtc = now
             };
             state.Entries.Add(entry);
+            EntryOrder.MoveToGroupStart(state.Entries, entry);
             Save(store, state);
             return new CliData { Action = "created", Note = AgentNotePayload.FromEntry(entry) };
         }
@@ -213,7 +214,13 @@ namespace SeerNote.Cli
             }
             if (request.Has("favorite"))
             {
-                entry.IsFavorite = request.RequiredBoolean("favorite");
+                bool favorite = request.RequiredBoolean("favorite");
+                bool favoriteChanged = favorite != entry.IsFavorite;
+                entry.IsFavorite = favorite;
+                if (favoriteChanged)
+                {
+                    EntryOrder.MoveToGroupStart(state.Entries, entry);
+                }
                 changed = true;
             }
             if (!changed)
@@ -242,6 +249,7 @@ namespace SeerNote.Cli
             {
                 entry.Sticky.IsOpen = false;
             }
+            EntryOrder.MoveToGroupStart(state.Entries, entry);
             Save(store, state);
             return new CliData { Action = "deleted", Note = AgentNotePayload.FromEntry(entry) };
         }
@@ -257,6 +265,7 @@ namespace SeerNote.Cli
             entry.IsDeleted = false;
             entry.DeletedUtc = null;
             entry.UpdatedUtc = DateTime.UtcNow;
+            EntryOrder.MoveToGroupStart(state.Entries, entry);
             Save(store, state);
             return new CliData { Action = "restored", Note = AgentNotePayload.FromEntry(entry) };
         }

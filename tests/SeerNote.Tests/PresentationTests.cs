@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -30,6 +31,7 @@ namespace SeerNote.Tests
             MainWindowUsesNotepadInspiredEditorSurface();
             NavigationSnapshotAggregatesEntriesInOnePolicy();
             SearchResultsCompleteTheKeyboardFocusLoop();
+            EntryListDropReordersWithinPinnedGroups();
             EntryListVirtualizesLargeCollections();
             EntryContextMenusAreSharedAndRetargeted();
             EntryContextMenuSharingAdaptsAtViewportThreshold();
@@ -448,6 +450,78 @@ namespace SeerNote.Tests
             });
         }
 
+        private static void EntryListDropReordersWithinPinnedGroups()
+        {
+            EnsureApplication();
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var favorite = new Entry { Title = "收藏", IsFavorite = true };
+                var first = new Entry { Title = "普通一" };
+                var second = new Entry { Title = "普通二" };
+                var state = new AppState();
+                state.Entries.Add(first);
+                state.Entries.Add(favorite);
+                state.Entries.Add(second);
+                var viewModel = new MainViewModel(state, new PortableStore(root), new ClipboardService(), Dispatcher.CurrentDispatcher);
+                var window = new MainWindow(viewModel)
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = SystemParameters.VirtualScreenLeft - 2000,
+                    Top = SystemParameters.VirtualScreenTop - 2000,
+                    ShowInTaskbar = false
+                };
+                try
+                {
+                    window.Show();
+                    window.Activate();
+                    DrainDispatcher(TimeSpan.Zero);
+                    ListBox results = Descendants(window).OfType<ListBox>().Single(control => AutomationProperties.GetName(control) == "条目结果");
+                    Require(AutomationProperties.GetHelpText(results).Contains("Alt+上/下"), "The result list should expose its keyboard reorder alternative.");
+                    results.ScrollIntoView(first);
+                    results.UpdateLayout();
+                    ListBoxItem firstContainer = results.ItemContainerGenerator.ContainerFromItem(first) as ListBoxItem;
+                    Require(firstContainer != null, "The first normal Note should have a realized drop target.");
+
+                    viewModel.SelectEntry(second);
+                    results.SelectedItem = second;
+                    var reorderData = new DataObject("SeerNote.EntryOrder", second.Id.ToString("D"));
+                    DragEventArgs dragOver = CreateDragEventArgs(reorderData, firstContainer, new Point(4, 1));
+                    dragOver.RoutedEvent = DragDrop.PreviewDragOverEvent;
+                    firstContainer.RaiseEvent(dragOver);
+                    Require(dragOver.Effects == DragDropEffects.Move, "A same-group Note drag should advertise a move operation.");
+                    AdornerLayer layer = AdornerLayer.GetAdornerLayer(firstContainer);
+                    Adorner[] adorners = layer == null ? null : layer.GetAdorners(firstContainer);
+                    Require(adorners != null && adorners.Any(adorner => adorner.GetType().Name == "EntryInsertionAdorner"), "A valid Note drop should render a non-layout insertion line.");
+
+                    DragEventArgs drop = CreateDragEventArgs(reorderData, firstContainer, new Point(4, 1));
+                    drop.RoutedEvent = DragDrop.DropEvent;
+                    firstContainer.RaiseEvent(drop);
+                    DrainDispatcher(TimeSpan.Zero);
+                    Require(viewModel.GetFilteredEntries().SequenceEqual(new[] { favorite, second, first }), "Dropping above a Note should reorder only its current pinned group.");
+                    Require(Object.ReferenceEquals(viewModel.SelectedEntry, second), "A drag reorder should preserve the selected Note.");
+
+                    results.ScrollIntoView(favorite);
+                    results.UpdateLayout();
+                    ListBoxItem favoriteContainer = results.ItemContainerGenerator.ContainerFromItem(favorite) as ListBoxItem;
+                    Require(favoriteContainer != null, "The favorite Note should have a realized boundary target.");
+                    DragEventArgs blocked = CreateDragEventArgs(new DataObject("SeerNote.EntryOrder", first.Id.ToString("D")), favoriteContainer, new Point(4, 1));
+                    blocked.RoutedEvent = DragDrop.PreviewDragOverEvent;
+                    favoriteContainer.RaiseEvent(blocked);
+                    Require(blocked.Effects == DragDropEffects.None, "Dragging across the favorite boundary should be visibly rejected.");
+                    DragEventArgs blockedDrop = CreateDragEventArgs(new DataObject("SeerNote.EntryOrder", first.Id.ToString("D")), favoriteContainer, new Point(4, 1));
+                    blockedDrop.RoutedEvent = DragDrop.DropEvent;
+                    favoriteContainer.RaiseEvent(blockedDrop);
+                    Require(viewModel.GetFilteredEntries().SequenceEqual(new[] { favorite, second, first }), "A rejected cross-group drop must not alter the order.");
+                }
+                finally
+                {
+                    window.Close();
+                    window.Dispose();
+                    DrainDispatcher(TimeSpan.Zero);
+                }
+            });
+        }
+
         private static void EntryContextMenusAreSharedAndRetargeted()
         {
             EnsureApplication();
@@ -502,6 +576,10 @@ namespace SeerNote.Tests
                     Require(containers.Count > 1, "The shared-menu test requires more than one realized Note row.");
                     ContextMenu sharedMenu = containers[0].ContextMenu;
                     Require(sharedMenu != null && containers.All(container => Object.ReferenceEquals(container.ContextMenu, sharedMenu)), "Active Note rows should share one command tree instead of prebuilding one tree per realized container.");
+                    Require(sharedMenu.ApplyTemplate(), "The shared Note menu should apply its themed control template.");
+                    Require(
+                        Object.ReferenceEquals(sharedMenu.Style, Application.Current.Resources[typeof(ContextMenu)]),
+                        "Shared Note menus must explicitly reuse the base ContextMenu theme because WPF implicit styles do not flow to derived control types.");
 
                     Entry first = results.ItemContainerGenerator.ItemFromContainer(containers[0]) as Entry;
                     Entry second = results.ItemContainerGenerator.ItemFromContainer(containers[1]) as Entry;

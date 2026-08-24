@@ -5,7 +5,7 @@ namespace SeerNote.Domain
 {
     public sealed class AppState
     {
-        public const int CurrentSchemaVersion = 2;
+        public const int CurrentSchemaVersion = 3;
 
         public AppState()
         {

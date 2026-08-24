@@ -252,7 +252,7 @@ function Verify-PublishStructure {
         throw 'SeerNote.Cli.exe version 未返回单行成功结果。'
     }
     $versionEnvelope = $versionOutput[0] | ConvertFrom-Json
-    if (-not $versionEnvelope.ok -or $versionEnvelope.data.version -ne '1.8.0') {
+    if (-not $versionEnvelope.ok -or $versionEnvelope.data.version -ne '1.9.0') {
         throw "SeerNote.Cli.exe 版本验证失败：$($versionEnvelope.data.version)"
     }
 

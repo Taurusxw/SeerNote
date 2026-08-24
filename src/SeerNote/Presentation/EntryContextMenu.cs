@@ -40,6 +40,7 @@ namespace SeerNote.Presentation
             Action<Entry> permanentDelete,
             Action<Entry, string> moveEntry)
         {
+            SetResourceReference(StyleProperty, typeof(ContextMenu));
             _deletedMenu = deletedMenu;
             _copyBody = copyBody ?? throw new ArgumentNullException(nameof(copyBody));
             _copyId = copyId ?? throw new ArgumentNullException(nameof(copyId));

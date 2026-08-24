@@ -29,7 +29,7 @@ namespace SeerNote.Presentation
         private Border _searchShortcut;
         private Button _clearSearchButton;
         private TextBlock _resultCount;
-        private ListBox _entryList;
+        private EntryListBox _entryList;
         private StackPanel _emptyResults;
         private TextBlock _emptyResultsText;
         private Button _emptyCreateButton;
@@ -513,8 +513,9 @@ namespace SeerNote.Presentation
             };
             ScrollViewer.SetHorizontalScrollBarVisibility(_entryList, ScrollBarVisibility.Disabled);
             AutomationProperties.SetName(_entryList, "条目结果");
-            AutomationProperties.SetHelpText(_entryList, "使用上下方向键选择，按 Enter 进入正文；搜索生效时按 Esc 清空。可拖到左侧分类中移动。");
+            AutomationProperties.SetHelpText(_entryList, "使用上下方向键选择，按 Enter 进入正文；搜索生效时按 Esc 清空。拖动或按 Alt+上/下可在当前收藏分组内排序；活动 Note 也可拖到左侧分类中移动。");
             _entryList.SelectionChanged += EntryListOnSelectionChanged;
+            _entryList.EntryReorderRequested += EntryListOnReorderRequested;
             _entryList.PreviewKeyDown += EntryListOnPreviewKeyDown;
             _entryList.PreviewMouseRightButtonDown += EntryListOnPreviewMouseRightButtonDown;
             _entryList.PreviewMouseLeftButtonDown += EntryListOnPreviewMouseLeftButtonDown;
@@ -1648,7 +1649,7 @@ namespace SeerNote.Presentation
 
         private void EntryListOnPreviewMouseMove(object sender, MouseEventArgs eventArgs)
         {
-            if (eventArgs.LeftButton != MouseButtonState.Pressed || _entryDragEntry == null || _entryDragEntry.IsDeleted)
+            if (eventArgs.LeftButton != MouseButtonState.Pressed || _entryDragEntry == null)
             {
                 return;
             }
@@ -1660,7 +1661,21 @@ namespace SeerNote.Presentation
             }
             Entry entry = _entryDragEntry;
             _entryDragEntry = null;
-            DragDrop.DoDragDrop(_entryList, new DataObject(CategorySidebar.EntryDragFormat, entry.Id.ToString("D")), DragDropEffects.Move);
+            var data = new DataObject();
+            data.SetData(EntryListBox.ReorderDragFormat, entry.Id.ToString("D"));
+            if (!entry.IsDeleted)
+            {
+                data.SetData(CategorySidebar.EntryDragFormat, entry.Id.ToString("D"));
+            }
+            DragDrop.DoDragDrop(_entryList, data, DragDropEffects.Move);
+        }
+
+        private void EntryListOnReorderRequested(object sender, EntryReorderEventArgs eventArgs)
+        {
+            if (_viewModel.ReorderEntry(eventArgs.EntryId, eventArgs.TargetEntryId, eventArgs.InsertAfter))
+            {
+                _entryList.Focus();
+            }
         }
 
         private void CategoryCreateOnRequested(object sender, EventArgs eventArgs)
@@ -1807,6 +1822,7 @@ namespace SeerNote.Presentation
         private void MainWindowOnPreviewKeyDown(object sender, KeyEventArgs eventArgs)
         {
             ModifierKeys modifiers = Keyboard.Modifiers;
+            Key effectiveKey = eventArgs.Key == Key.System ? eventArgs.SystemKey : eventArgs.Key;
             if (modifiers == ModifierKeys.Control && eventArgs.Key == Key.N)
             {
                 CreateAndEdit();
@@ -1833,6 +1849,11 @@ namespace SeerNote.Presentation
                 _viewModel.ToggleFavorite();
                 eventArgs.Handled = true;
             }
+            else if (modifiers == ModifierKeys.Alt && (effectiveKey == Key.Up || effectiveKey == Key.Down) && _entryList.IsKeyboardFocusWithin)
+            {
+                MoveSelectedEntry(effectiveKey == Key.Up ? -1 : 1);
+                eventArgs.Handled = true;
+            }
             else if (modifiers == ModifierKeys.None && eventArgs.Key == Key.Delete && _entryList.IsKeyboardFocusWithin)
             {
                 if (_viewModel.SelectedView == SmartView.Trash)
@@ -1849,6 +1870,23 @@ namespace SeerNote.Presentation
             {
                 ClearSearchAndFocus();
                 eventArgs.Handled = true;
+            }
+        }
+
+        private void MoveSelectedEntry(int offset)
+        {
+            Entry source = _viewModel.SelectedEntry;
+            IList<Entry> visible = _viewModel.GetFilteredEntries();
+            int sourceIndex = source == null ? -1 : visible.IndexOf(source);
+            int targetIndex = sourceIndex + offset;
+            if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= visible.Count)
+            {
+                return;
+            }
+            Entry target = visible[targetIndex];
+            if (EntryOrder.IsSameGroup(source, target))
+            {
+                _viewModel.ReorderEntry(source.Id, target.Id, offset > 0);
             }
         }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows.Threading;
 using SeerNote.Domain;
@@ -17,6 +18,7 @@ namespace SeerNote.Tests
         public static void RunAll()
         {
             ViewModelDeletesRestoresAndPersists();
+            ViewModelReordersFilteredNotesAndPersistsHiddenSlots();
             ViewModelClearsTrashAndPersists();
             ClearTrashCompactsInPlaceAndPreservesNoOpState();
             ViewModelManagesOrderedCategoriesAndUnifiedNotes();
@@ -28,6 +30,47 @@ namespace SeerNote.Tests
             SingleInstanceRejectsSecondOwner();
             DirectoryIdentityIgnoresCaseAndTrailingSeparators();
             LockFileRejectsDifferentNamedInstances();
+        }
+
+        private static void ViewModelReordersFilteredNotesAndPersistsHiddenSlots()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var state = new AppState();
+                state.Categories.Add("隐藏");
+                state.Categories.Add("显示");
+                var hiddenFirst = new Entry { Title = "隐藏一", Category = "隐藏" };
+                var visibleFirst = new Entry { Title = "显示一", Category = "显示" };
+                var hiddenSecond = new Entry { Title = "隐藏二", Category = "隐藏" };
+                var visibleSecond = new Entry { Title = "显示二", Category = "显示" };
+                var favorite = new Entry { Title = "收藏", Category = "显示", IsFavorite = true };
+                state.Entries.Add(hiddenFirst);
+                state.Entries.Add(visibleFirst);
+                state.Entries.Add(hiddenSecond);
+                state.Entries.Add(visibleSecond);
+                state.Entries.Add(favorite);
+                var store = new PortableStore(root);
+
+                using (var viewModel = new MainViewModel(state, store, new ClipboardService(), Dispatcher.CurrentDispatcher))
+                {
+                    viewModel.SelectCategory("显示");
+                    viewModel.SelectEntry(visibleSecond);
+                    IList<Entry> before = viewModel.GetFilteredEntries();
+                    Require(before.SequenceEqual(new[] { favorite, visibleFirst, visibleSecond }), "The filtered reorder fixture should pin favorites before the normal group.");
+                    Require(viewModel.ReorderEntry(visibleSecond.Id, visibleFirst.Id, false), "A visible Note should move before another Note in its group.");
+                    IList<Entry> after = viewModel.GetFilteredEntries();
+                    Require(after.SequenceEqual(new[] { favorite, visibleSecond, visibleFirst }), "The filtered projection should publish the requested manual order.");
+                    Require(Object.ReferenceEquals(viewModel.SelectedEntry, visibleSecond), "Reordering should preserve the selected Note identity.");
+                    Require(Object.ReferenceEquals(state.Entries[0], hiddenFirst) && Object.ReferenceEquals(state.Entries[1], visibleSecond)
+                        && Object.ReferenceEquals(state.Entries[2], hiddenSecond) && Object.ReferenceEquals(state.Entries[3], visibleFirst), "Hidden Notes should retain their slots while visible slots are reordered.");
+                    Require(!viewModel.ReorderEntry(visibleFirst.Id, favorite.Id, false), "Reordering across the favorite boundary should be rejected.");
+                    Require(viewModel.Flush(), "Manual Note order should flush successfully.");
+                }
+
+                LoadResult loaded = store.Load();
+                Require(loaded.Success, "Manual Note order should reload successfully.");
+                Require(loaded.State.Entries.Select(entry => entry.Title).SequenceEqual(new[] { "隐藏一", "显示二", "隐藏二", "显示一", "收藏" }), "Persisted ordering should retain hidden slots and the reordered visible Notes.");
+            });
         }
 
         private static void ViewModelUpdatesCloseButtonBehaviorAndPersists()

@@ -12,7 +12,8 @@ namespace SeerNote.Tests
             EntryCloneIsDeepAndStateValidates();
             UserSettingsDefaultCloneAndValidationCoverCloseBehavior();
             SearchFiltersSystemViewsAndChineseSubstrings();
-            SearchSortsFavoritesAndTrashByExpectedDates();
+            SearchPreservesManualOrderWithinPinnedGroups();
+            EntryOrderReordersVisibleSlotsWithoutMovingHiddenNotes();
             SearchThousandEntriesWithinBudget();
             PromptVariablesAreOrderedUniqueAndRenderOnce();
             PromptRenderingReportsMissingValues();
@@ -112,7 +113,7 @@ namespace SeerNote.Tests
             AssertSame(deleted, trash[0], "Trash smart view returned the wrong entry.");
         }
 
-        private static void SearchSortsFavoritesAndTrashByExpectedDates()
+        private static void SearchPreservesManualOrderWithinPinnedGroups()
         {
             var normal = NewEntry("普通", String.Empty, String.Empty, 3);
             var favorite = NewEntry("收藏", String.Empty, String.Empty, 1);
@@ -126,12 +127,32 @@ namespace SeerNote.Tests
             var entries = new[] { normal, oldDeleted, favorite, newDeleted };
 
             var all = EntrySearch.Filter(entries, String.Empty, SmartView.All);
-            AssertSame(favorite, all[0], "Favorites must sort before non-favorites.");
-            AssertSame(normal, all[1], "Remaining entries must sort by most recent update.");
+            AssertSame(favorite, all[0], "Favorites must remain pinned before non-favorites.");
+            AssertSame(normal, all[1], "Non-favorites should preserve their stored manual order.");
 
             var trash = EntrySearch.Filter(entries, String.Empty, SmartView.Trash);
-            AssertSame(newDeleted, trash[0], "Trash must sort by deletion time descending.");
-            AssertSame(oldDeleted, trash[1], "Trash sort order is incorrect.");
+            AssertSame(oldDeleted, trash[0], "Trash should preserve its stored manual order.");
+            AssertSame(newDeleted, trash[1], "Trash manual order should not be replaced by deletion time.");
+        }
+
+        private static void EntryOrderReordersVisibleSlotsWithoutMovingHiddenNotes()
+        {
+            var hiddenFirst = NewEntry("隐藏一", String.Empty, String.Empty, 1);
+            var visibleFirst = NewEntry("显示一", String.Empty, String.Empty, 2);
+            var hiddenSecond = NewEntry("隐藏二", String.Empty, String.Empty, 3);
+            var visibleSecond = NewEntry("显示二", String.Empty, String.Empty, 4);
+            var favorite = NewEntry("收藏", String.Empty, String.Empty, 5);
+            favorite.IsFavorite = true;
+            var entries = new List<Entry> { hiddenFirst, visibleFirst, hiddenSecond, visibleSecond, favorite };
+            var visible = new List<Entry> { visibleFirst, visibleSecond, favorite };
+
+            Assert(EntryOrder.ReorderVisible(entries, visible, visibleSecond.Id, visibleFirst.Id, false), "Visible Notes in one group should be reorderable.");
+            AssertSame(hiddenFirst, entries[0], "The first hidden Note must retain its underlying slot.");
+            AssertSame(visibleSecond, entries[1], "The reordered Note should occupy the first visible slot.");
+            AssertSame(hiddenSecond, entries[2], "The second hidden Note must retain its underlying slot.");
+            AssertSame(visibleFirst, entries[3], "The displaced Note should occupy the other visible slot.");
+            AssertSame(favorite, entries[4], "Notes in another favorite group must remain untouched.");
+            Assert(!EntryOrder.ReorderVisible(entries, visible, visibleFirst.Id, favorite.Id, false), "Dragging across the favorite boundary must be rejected.");
         }
 
         private static void PromptVariablesAreOrderedUniqueAndRenderOnce()

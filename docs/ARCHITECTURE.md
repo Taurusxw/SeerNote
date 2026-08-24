@@ -31,6 +31,7 @@ SeerNote.exe / SeerNote.App
 ├─ Domain
 │  ├─ Entry / AppState / UserSettings / ordered categories
 │  ├─ EntrySearch
+│  ├─ EntryOrder
 │  └─ PromptTemplate
 ├─ Storage
 │  ├─ PortableStore
@@ -77,7 +78,7 @@ Parse(text) -> ordered unique variables
 Render(text, values) -> rendered text or validation error
 ```
 
-`EntrySearch` 是纯函数模块；调用者只提交条目、查询和智能视图，不了解排序与匹配细节。
+`EntrySearch` 是纯函数模块；调用者只提交条目、查询和智能视图，不了解过滤、收藏分组与匹配细节。`EntryOrder` 集中拥有旧版时间顺序迁移、分组顶部插入和可见槽位重排规则，桌面端、CLI 与存储迁移不得各自复制一套顺序策略。
 
 `CliApplication` 把参数解析、校验、工作区锁、加载/保存、错误映射和 JSON 输出隐藏在一个进程级接口后：
 
@@ -85,7 +86,7 @@ Render(text, values) -> rendered text or validation error
 Run(args, stdin, stdout, stderr, applicationRoot) -> exitCode
 ```
 
-控制台入口只提供标准流和可执行文件目录，不重复命令分派。自动化测试与真实 `SeerNote.Cli.exe` 穿过同一 seam。机器 envelope 使用 `seernote.cli.v1`，Note 数据使用 `seernote.note.v1`；两者独立于权威存储 `schemaVersion: 2`，不会把内部 `StickyState` 或保存实现暴露给调用者。
+控制台入口只提供标准流和可执行文件目录，不重复命令分派。自动化测试与真实 `SeerNote.Cli.exe` 穿过同一 seam。机器 envelope 使用 `seernote.cli.v1`，Note 数据使用 `seernote.note.v1`；两者独立于权威存储 `schemaVersion: 3`，不会把内部 `StickyState`、手工顺序实现或保存协议暴露给调用者。
 
 `StickyWindowSizeCalculator` 接收标题、正文和工作区尺寸，在 `320×180` 至 `720×640` 的阈值内测量候选宽度的真实 WPF 中文换行高度。算法优先选择能完整显示且面积较小、纵横比不过分狭长的尺寸；若所有候选均超高，则选择纵向溢出最少的宽度并封顶高度。`StickyWindow` 只负责调度测量、尊重当前会话的手动调整并保存最终位置，不把尺寸算法扩散到主窗口或数据层。
 
@@ -97,7 +98,7 @@ Run(args, stdin, stdout, stderr, applicationRoot) -> exitCode
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "savedUtc": "2026-08-18T00:00:00.0000000Z",
   "settings": {
     "globalHotkey": "Ctrl+Shift+Space",
@@ -121,7 +122,7 @@ Run(args, stdin, stdout, stderr, applicationRoot) -> exitCode
 }
 ```
 
-版本 2 用根级有序 `categories` 保存可为空的自定义分类，Entry 只保存分类名称，不再保存随手记/提示词类型。读取版本 1 时，存储层从旧 Entry 分类生成去重有序列表，把 `memo`/`prompt` 视图归一为 `all`，正文、收藏、删除和置顶状态保持不变；首次版本 2 保存通过原子替换生成版本 1 主文件备份。未知字段在同一 schema 内允许忽略；后续 `schemaVersion` 提升仍必须有迁移和回滚证据。
+版本 2 用根级有序 `categories` 保存可为空的自定义分类，Entry 只保存分类名称，不再保存随手记/提示词类型。版本 3 把 `entries` 数组顺序定义为 Note 手工顺序：读取版本 1/2 时先按旧展示规则冻结收藏、普通和回收站的首次顺序，再在内存中升级为版本 3；后续保存继续走原子替换并保留旧主文件备份。版本 1 仍会从旧 Entry 分类生成去重有序列表并把 `memo`/`prompt` 视图归一为 `all`，正文、收藏、删除和置顶状态保持不变。未知字段在同一 schema 内允许忽略；后续 `schemaVersion` 提升仍必须有迁移和回滚证据。
 
 ## 5. 保存协议
 
@@ -157,8 +158,10 @@ Run(args, stdin, stdout, stderr, applicationRoot) -> exitCode
 ## 8. 搜索与排序
 
 - 规范化查询：Trim，使用 `InvariantCultureIgnoreCase` 子串匹配标题、正文和分类。
-- 收藏置顶、所有条目和回收站系统视图先过滤；自定义分类在系统视图后过滤，查询再匹配。
-- 排序：未删除前置、Favorite 前置、最近更新前置；回收站按删除时间倒序。
+- 收藏置顶、所有条目和回收站系统视图先过滤；自定义分类先收窄候选集，查询再匹配。
+- `entries` 数组保存权威手工顺序；所有条目视图只把 Favorite 组投影到普通组之前，各组内部与回收站都保持数组顺序，编辑时间不再触发重排。
+- 拖放只允许删除状态一致的条目；活动 Note 还必须处于同一 Favorite 分组。筛选状态下只替换当前可见同组 Note 占据的底层槽位，隐藏 Note 的槽位和相对顺序保持不变。
+- 新建、收藏切换、软删除与还原把 Note 放到目标组顶部；桌面端和 CLI 共用 `EntryOrder`，避免两个写入入口产生不同顺序。
 - 结果计算纯内存完成；1,000 条目标低于 50 ms。
 
 自定义分类的顺序由 `AppState.Categories` 权威保存。分类重命名或删除会原子更新全部 Entry 引用；删除分类只把所属 Note 移到未分类，不删除正文。`CategorySidebar` 独立负责分类右键菜单、分类拖拽排序和 Note 投放目标，`MainViewModel` 负责校验、状态修改与持久化。
@@ -176,9 +179,9 @@ Run(args, stdin, stdout, stderr, applicationRoot) -> exitCode
 
 语义 token 集中在代码式 WPF 的 `Theme/` 模块：Canvas、Surface、SurfaceRaised、Ink、Muted、Border、Accent、AccentHover、AccentInk、Gold、Success、Warning、Danger、Focus。`ThemeResources` 同时拥有按钮、输入框、列表行、滚动条与组合框的核心模板，并提供 Primary、Quiet、Toolbar、Navigation 与 Danger 按钮角色；模板保留原生 `PART_ContentHost`、IME、键盘和 UI Automation 语义。石墨、午夜、雾白和鼠尾草只映射语义角色，功能视图不能散落主题专属颜色。语义画刷的 `Color` 绑定到可通知的主题颜色状态，使其在 WPF 样式密封后仍不可冻结；切换主题只更新颜色状态，保持画刷引用，不重建窗口或丢失编辑状态。设置使用二级折叠组；分类选择、下拉项和右键菜单使用同一语义主题。旧设置默认石墨，高对比模式由 Windows 系统颜色接管。本机没有 .NET Framework targeting pack/XAML 编译目标，因此构建直接使用 Visual Studio Roslyn 与系统 WPF 程序集；这不改变运行时或标准控件行为。
 
-`MainWindow` 继续作为代码式 WPF 的展示组合根，不接收新的存储、领域或平台职责。当前重设计把布局策略留在 `MainWindowLayoutCalculator`、分类选择/菜单/拖放编排留在 `CategorySidebar`、分类集合与视觉容器生命周期留在 `CategoryListBox`、Note 列表的虚拟化容器生命周期留在 `EntryListBox`、语义控件语法留在 `ThemeResources`；后续若再增加独立交互域，必须优先抽取有行为测试保护的展示边界，而不是继续扩大组合根。
+`MainWindow` 继续作为代码式 WPF 的展示组合根，不接收新的存储、领域或平台职责。当前重设计把布局策略留在 `MainWindowLayoutCalculator`、分类选择/菜单/拖放编排留在 `CategorySidebar`、分类集合与视觉容器生命周期留在 `CategoryListBox`、Note 列表的虚拟化容器与排序投放命中留在 `EntryListBox`、顺序策略留在 `EntryOrder`、语义控件语法留在 `ThemeResources`；后续若再增加独立交互域，必须优先抽取有行为测试保护的展示边界，而不是继续扩大组合根。
 
-`EntryListBox` 以 `Entry` 数据项作为 `ItemsSource`，启用 `VirtualizingStackPanel`、逻辑滚动和 `Recycling`。它在容器准备与清理阶段统一刷新或释放标题、正文预览、分类时间、收藏标记、右键菜单、工具提示与 UI Automation 名称；`MainWindow` 只持有筛选结果、选择、拖拽和业务动作，不能重新按结果总数创建 `ListBoxItem`。这条边界同时防止回收容器串行和组合根继续吸收独立展示职责。
+`EntryListBox` 以 `Entry` 数据项作为 `ItemsSource`，启用 `VirtualizingStackPanel`、逻辑滚动和 `Recycling`。它在容器准备与清理阶段统一刷新或释放标题、正文预览、分类时间、收藏标记、右键菜单、工具提示与 UI Automation 名称，并拥有同组投放命中、主题插入线和边缘自动滚动；`MainWindow` 只打包排序/分类两种拖动数据并把排序事件交给 `MainViewModel`，不能重新按结果总数创建 `ListBoxItem`。这条边界同时防止回收容器串行和组合根继续吸收独立展示职责。
 
 `EntryListBox` 对 Note 右键菜单使用同一可见容量边界：1–6 条保留直接菜单，第 7 条起由列表实例分别缓存一棵活动菜单和一棵回收站菜单，避免为每个回收容器重复建立分类子菜单。`ContextMenuOpening` 必须先从事件源容器解析并同步精确 `Entry`；直接菜单只在本次打开期间保存该目标，共享 `EntryContextMenu` 同时刷新收藏文案和分类勾选。两种路径的命令都消费稳定目标，后续选择变化不能把复制、收藏、删除或还原重定向到另一条 Note。命令执行或菜单关闭后立即释放目标引用，列表缓存本身随 `EntryListBox` 生命周期回收。
 
@@ -186,7 +189,7 @@ Run(args, stdin, stdout, stderr, applicationRoot) -> exitCode
 
 `MainViewModel` 的展示通知按影响范围分流：`ContentChanged` 表示 Note 数据、筛选范围或持久状态可能改变，需要刷新导航、分类、结果和编辑器；`SelectedEntryChanged` 只表示当前 Note 身份变化，`MainWindow` 仅同步列表选择、编辑器和文档状态；`StatusChanged` 只刷新保存/动作反馈。纯选择不能借用通用内容事件触发整页刷新。
 
-标题与正文的 `TextChanged` 在编辑重入边界内更新领域对象，并以 `DispatcherPriority.Background` 的 120 ms `DispatcherTimer` 合并结果列表刷新；该 Tick 只重新计算可能受文字与 `UpdatedUtc` 影响的筛选、排序、标题和正文预览。智能视图计数与分类计数不依赖标题/正文，不能进入这条高频 Tick；自动保存由 `MainViewModel` 独立的约 350 ms 定时器负责。
+标题与正文的 `TextChanged` 在编辑重入边界内更新领域对象，并以 `DispatcherPriority.Background` 的 120 ms `DispatcherTimer` 合并结果列表刷新；该 Tick 只重新计算可能受文字影响的筛选、标题和正文预览，`UpdatedUtc` 继续记录编辑时间但不覆盖手工顺序。智能视图计数与分类计数不依赖标题/正文，不能进入这条高频 Tick；自动保存由 `MainViewModel` 独立的约 350 ms 定时器负责。
 
 `NavigationSnapshot` 拥有导航聚合规则：一次枚举同时计算活跃、收藏、回收站和按修剪名称合并的分类计数，并复制自定义分类顺序为只读内容。`MainViewModel` 缓存唯一的当前快照，只有新建、收藏、删除/恢复、移动与分类增删改序等会改变导航成员或顺序的动作才使它失效；标题/正文、置顶小窗内容、搜索词和纯导航选择继续复用。`TrashCount` 与 `MainWindow` 消费同一快照，窗口在快照引用与当前选择均未变化时直接返回，不再为证明“没变”扫描全部 Note；重建后的内容等价判断仍避免无谓控件写入。
 

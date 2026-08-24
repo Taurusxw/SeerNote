@@ -14,8 +14,10 @@ namespace SeerNote.Tests
         public static void RunAll()
         {
             UnicodeRoundTrip();
+            CurrentSchemaPreservesManualEntryOrder();
             LegacySettingsDefaultCloseButtonToExit();
             LegacySchemaMigratesTypesAndCategories();
+            SchemaTwoMigratesLegacyDisplayOrder();
             ReplaceCreatesBackup();
             CorruptPrimaryRecoversFromBackup();
             UnsupportedSchemaIsRejected();
@@ -44,11 +46,30 @@ namespace SeerNote.Tests
                 Require(loaded.State.Settings.Theme == AppTheme.Sage, "Selected theme should round-trip.");
 
                 var json = File.ReadAllText(Path.Combine(root, "data", "notes.json"), Encoding.UTF8);
-                Require(json.Contains("\"schemaVersion\":2"), "Persisted contract should own the current lowercase schema member.");
+                Require(json.Contains("\"schemaVersion\":3"), "Persisted contract should own the current lowercase schema member.");
                 Require(json.Contains("\"categories\":[\"工作\"]"), "Persisted contract should preserve ordered custom categories.");
                 Require(!json.Contains("\"type\":"), "Unified Note storage should no longer emit the legacy memo/prompt type.");
                 Require(json.Contains("\"closeButtonBehavior\":\"minimizetotray\""), "Persisted settings should include close button behavior.");
                 Require(json.Contains("\"theme\":\"sage\""), "Persisted settings should include the selected theme.");
+            });
+        }
+
+        private static void CurrentSchemaPreservesManualEntryOrder()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                var store = new PortableStore(root);
+                var state = new AppState();
+                DateTime baseline = DateTime.UtcNow.AddHours(-3);
+                var first = new Entry { Title = "手工第一", CreatedUtc = baseline, UpdatedUtc = baseline.AddHours(1) };
+                var second = new Entry { Title = "手工第二", CreatedUtc = baseline, UpdatedUtc = baseline.AddHours(2) };
+                state.Entries.Add(first);
+                state.Entries.Add(second);
+
+                Require(store.Save(state).Success, "Schema 3 manual-order fixture should save.");
+                LoadResult loaded = store.Load();
+                Require(loaded.Success, "Schema 3 manual-order fixture should reload.");
+                Require(loaded.State.Entries[0].Id == first.Id && loaded.State.Entries[1].Id == second.Id, "Schema 3 should treat the entries array as authoritative manual order.");
             });
         }
 
@@ -93,6 +114,40 @@ namespace SeerNote.Tests
                 Require(loaded.State.Categories.Count == 1 && loaded.State.Categories[0] == "工作", "Legacy entry categories should become ordered custom categories.");
                 Require(loaded.State.Entries.Count == 1 && loaded.State.Entries[0].Body == "你好 {{姓名}}", "Legacy Note body should survive migration.");
             });
+        }
+
+        private static void SchemaTwoMigratesLegacyDisplayOrder()
+        {
+            WithTemporaryDirectory(delegate(string root)
+            {
+                string dataDirectory = Path.Combine(root, "data");
+                Directory.CreateDirectory(dataDirectory);
+                string normalOld = StoredEntryJson("普通旧", false, false, "2026-08-18T01:00:00.0000000Z", null);
+                string deletedOld = StoredEntryJson("回收旧", false, true, "2026-08-18T02:00:00.0000000Z", "2026-08-18T02:00:00.0000000Z");
+                string favoriteOld = StoredEntryJson("收藏旧", true, false, "2026-08-18T03:00:00.0000000Z", null);
+                string normalNew = StoredEntryJson("普通新", false, false, "2026-08-18T04:00:00.0000000Z", null);
+                string deletedNew = StoredEntryJson("回收新", false, true, "2026-08-18T05:00:00.0000000Z", "2026-08-18T05:00:00.0000000Z");
+                string favoriteNew = StoredEntryJson("收藏新", true, false, "2026-08-18T06:00:00.0000000Z", null);
+                string json = "{\"schemaVersion\":2,\"savedUtc\":\"2026-08-18T07:00:00.0000000Z\","
+                    + "\"settings\":{\"globalHotkey\":\"Ctrl+Shift+Space\",\"windowBounds\":{\"left\":0,\"top\":0,\"width\":1080,\"height\":720},\"lastSmartView\":\"all\"},"
+                    + "\"categories\":[],\"entries\":[" + normalOld + "," + deletedOld + "," + favoriteOld + "," + normalNew + "," + deletedNew + "," + favoriteNew + "]}";
+                File.WriteAllText(Path.Combine(dataDirectory, "notes.json"), json, new UTF8Encoding(false));
+
+                LoadResult loaded = new PortableStore(root).Load();
+                Require(loaded.Success, "Schema 2 data should migrate to manual ordering.");
+                string[] titles = loaded.State.Entries.Select(entry => entry.Title).ToArray();
+                Require(titles.SequenceEqual(new[] { "收藏新", "收藏旧", "普通新", "普通旧", "回收新", "回收旧" }), "Schema 2 migration should freeze the legacy first-display order before schema 3 takes ownership.");
+                Require(loaded.State.SchemaVersion == AppState.CurrentSchemaVersion, "Schema 2 migration should advance to the current schema in memory.");
+            });
+        }
+
+        private static string StoredEntryJson(string title, bool favorite, bool deleted, string updatedUtc, string deletedUtc)
+        {
+            return "{\"id\":\"" + Guid.NewGuid().ToString("D") + "\",\"title\":\"" + title + "\",\"body\":\"\",\"category\":\"\","
+                + "\"isFavorite\":" + favorite.ToString().ToLowerInvariant() + ",\"isDeleted\":" + deleted.ToString().ToLowerInvariant() + ","
+                + "\"sticky\":{\"isOpen\":false,\"left\":0,\"top\":0,\"width\":360,\"height\":260},"
+                + "\"createdUtc\":\"2026-08-18T00:00:00.0000000Z\",\"updatedUtc\":\"" + updatedUtc + "\""
+                + (deletedUtc == null ? String.Empty : ",\"deletedUtc\":\"" + deletedUtc + "\"") + "}";
         }
 
         private static void ReplaceCreatesBackup()

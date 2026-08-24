@@ -7,6 +7,7 @@ SeerNote 是一款面向 Windows 11 的中文便携 Note 工具：一处快速�
 - 所有内容都是统一的 Note；正文含 `{{变量}}` 时，复制前自动询问变量值。
 - 左侧支持自定义分类的创建、重命名、删除、拖拽排序，以及把 Note 拖入分类。
 - 左侧固定顺序为“收藏置顶、所有条目、自定义分类、回收站”；Note 支持复制、收藏、置顶小窗、移动分类和删除等右键操作。
+- 中栏 Note 可在同一收藏分组内拖动排序，收藏始终置顶；`Alt+↑/↓` 提供等价键盘操作，搜索或分类筛选下排序不会挪动隐藏 Note。
 - 主窗口按紧凑、标准、宽屏和超宽四档自适应 1080p、1200p、2K 与 4K 工作区；导航与分类显示实时数量，搜索范围、快捷键和本地保存状态始终可见。
 - 右侧底部集中提供“复制正文、复制 ID、复制为 JSON”，交接操作与删除/恢复保持分区；回收站 Note 仍可复制 ID/JSON 供智能体检查。
 - 同目录的 `SeerNote.Cli.exe` 提供 `schema/categories/list/get/create/update/delete/restore` 命令；成功输出单个 JSON 对象，失败输出稳定错误码与结构化 JSON。
@@ -19,7 +20,7 @@ CLI 用法见 [命令行接口](docs/CLI.md)；交互细节与明确非目标见
 
 ## 便携约定
 
-最新便携版已经发布。推荐从 [GitHub Releases](https://github.com/Taurusxw/SeerNote/releases/latest) 下载 `SeerNote-portable-v1.8.0.zip`，解压后直接运行：
+最新便携版已经发布。推荐从 [GitHub Releases](https://github.com/Taurusxw/SeerNote/releases/latest) 下载 `SeerNote-portable-v1.9.0.zip`，解压后直接运行：
 
 ```text
 SeerNote.exe
@@ -36,7 +37,7 @@ SeerNote.Cli.exe schema
 
 ## 发布状态
 
-`1.8.0` 已发布到仓库根目录，补全搜索键盘闭环和辅助技术状态反馈，并针对大 Note/分类集合完成列表虚拟化、稳定快照、窄刷新边界、菜单复用与线性回收站清理。完整发布证据见 [1.8.0 发布验收](docs/progress/releases/v1.8.0/ACCEPTANCE.md)。
+`1.9.0` 已发布到仓库根目录：Note 支持同收藏组手工排序、过滤视图隐藏槽位保护与 `Alt+↑/↓` 键盘操作，便携数据升级为 schema 3；共享 Note 右键菜单同时修复为统一主题。完整发布证据见 [1.9.0 发布验收](docs/progress/releases/v1.9.0/ACCEPTANCE.md)。
 
 ## 构建
 

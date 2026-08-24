@@ -48,9 +48,13 @@ namespace SeerNote.Storage
             var categories = SchemaVersion == 1
                 ? CategoriesFromLegacyEntries(entries)
                 : Categories == null ? null : new List<string>(Categories);
+            if (SchemaVersion == 1 || SchemaVersion == 2)
+            {
+                EntryOrder.ApplyLegacyOrder(entries);
+            }
             return new AppState
             {
-                SchemaVersion = SchemaVersion == 1 ? AppState.CurrentSchemaVersion : SchemaVersion,
+                SchemaVersion = SchemaVersion == 1 || SchemaVersion == 2 ? AppState.CurrentSchemaVersion : SchemaVersion,
                 SavedUtc = ParseUtc(SavedUtc, "savedUtc"),
                 Settings = Settings == null ? null : Settings.ToDomain(),
                 Categories = categories,

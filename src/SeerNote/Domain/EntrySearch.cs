@@ -23,17 +23,29 @@ namespace SeerNote.Domain
             }
 
             var result = new List<Entry>();
+            var favorites = smartView == SmartView.All ? new List<Entry>() : null;
             var normalizedQuery = (query ?? String.Empty).Trim();
 
             foreach (var entry in entries)
             {
                 if (entry != null && IsInSmartView(entry, smartView) && Matches(entry, normalizedQuery))
                 {
-                    result.Add(entry);
+                    if (favorites != null && entry.IsFavorite)
+                    {
+                        favorites.Add(entry);
+                    }
+                    else
+                    {
+                        result.Add(entry);
+                    }
                 }
             }
 
-            result.Sort(new EntryComparer(smartView == SmartView.Trash));
+            if (favorites != null)
+            {
+                favorites.AddRange(result);
+                return favorites;
+            }
             return result;
         }
 
@@ -75,42 +87,5 @@ namespace SeerNote.Domain
             return !String.IsNullOrEmpty(text) && text.IndexOf(query, StringComparison.InvariantCultureIgnoreCase) >= 0;
         }
 
-        private sealed class EntryComparer : IComparer<Entry>
-        {
-            private readonly bool _isTrash;
-
-            public EntryComparer(bool isTrash)
-            {
-                _isTrash = isTrash;
-            }
-
-            public int Compare(Entry x, Entry y)
-            {
-                if (_isTrash)
-                {
-                    var deletedComparison = Nullable.Compare(y.DeletedUtc, x.DeletedUtc);
-                    if (deletedComparison != 0)
-                    {
-                        return deletedComparison;
-                    }
-                }
-                else
-                {
-                    var favoriteComparison = y.IsFavorite.CompareTo(x.IsFavorite);
-                    if (favoriteComparison != 0)
-                    {
-                        return favoriteComparison;
-                    }
-                }
-
-                var updatedComparison = y.UpdatedUtc.CompareTo(x.UpdatedUtc);
-                if (updatedComparison != 0)
-                {
-                    return updatedComparison;
-                }
-
-                return x.Id.CompareTo(y.Id);
-            }
-        }
     }
 }

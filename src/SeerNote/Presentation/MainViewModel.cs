@@ -233,6 +233,7 @@ namespace SeerNote.Presentation
                 UpdatedUtc = now
             };
             State.Entries.Add(entry);
+            EntryOrder.MoveToGroupStart(State.Entries, entry);
             _selectedEntry = entry;
             _selectedView = SmartView.All;
             State.Settings.LastSmartView = _selectedView;
@@ -385,6 +386,19 @@ namespace SeerNote.Presentation
             return true;
         }
 
+        public bool ReorderEntry(Guid entryId, Guid targetEntryId, bool insertAfter)
+        {
+            ThrowIfDisposed();
+            if (!EntryOrder.ReorderVisible(State.Entries, GetFilteredEntries(), entryId, targetEntryId, insertAfter))
+            {
+                return false;
+            }
+
+            MarkChanged();
+            RaiseContentChanged();
+            return true;
+        }
+
         public void ToggleFavorite()
         {
             if (_selectedEntry == null || _selectedEntry.IsDeleted)
@@ -392,6 +406,7 @@ namespace SeerNote.Presentation
                 return;
             }
             _selectedEntry.IsFavorite = !_selectedEntry.IsFavorite;
+            EntryOrder.MoveToGroupStart(State.Entries, _selectedEntry);
             TouchSelected(true);
         }
 
@@ -409,6 +424,7 @@ namespace SeerNote.Presentation
             {
                 deleted.Sticky.IsOpen = false;
             }
+            EntryOrder.MoveToGroupStart(State.Entries, deleted);
             MarkChanged(true);
             EnsureVisibleSelection();
             RaiseContentChanged();
@@ -425,6 +441,7 @@ namespace SeerNote.Presentation
             restored.IsDeleted = false;
             restored.DeletedUtc = null;
             restored.UpdatedUtc = DateTime.UtcNow;
+            EntryOrder.MoveToGroupStart(State.Entries, restored);
             MarkChanged(true);
             EnsureVisibleSelection();
             RaiseContentChanged();

@@ -14,7 +14,7 @@ namespace SeerNote.Storage
     /// </summary>
     public sealed class PortableStore
     {
-        public const int SupportedSchemaVersion = 2;
+        public const int SupportedSchemaVersion = 3;
         private const int MaximumBackupCount = 10;
         private const string NotesFileName = "notes.json";
         private static readonly StringComparison PathComparison = StringComparison.OrdinalIgnoreCase;
